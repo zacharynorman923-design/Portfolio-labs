@@ -522,7 +522,22 @@ function renderOptimizer(objective) {
   }
 
   const cur = evaluateWeights(stats, run.holds.map(h => +h.weight), R.rf);
-  const opt = objective ? optimizePortfolio(stats, objective, R.rf) : null;
+
+  /* Show what's actually reachable, and seed the target boxes from the
+     current mix so the first solve is anchored to something meaningful. */
+  const range = frontierRange(stats.mu, stats.cov);
+  $('volRange').textContent = 'reachable ' + FMT.pct(range.minVol, 1) + ' – ' + FMT.pct(range.maxVol, 1);
+  $('retRange').textContent = 'reachable ' + FMT.pct(range.minRet, 1) + ' – ' + FMT.pct(range.maxRet, 1);
+  if (!objective) {
+    $('tgtVol').value = (cur.vol * 100).toFixed(1);
+    $('tgtRet').value = (cur.ret * 100).toFixed(1);
+  }
+
+  let target = null;
+  if (objective === 'targetvol') target = clampNum($('tgtVol').value, 0, 100, cur.vol * 100) / 100;
+  if (objective === 'targetret') target = clampNum($('tgtRet').value, -100, 1000, cur.ret * 100) / 100;
+
+  const opt = objective ? optimizePortfolio(stats, objective, R.rf, target) : null;
 
   // frontier + markers
   const frontier = efficientFrontier(stats.mu, stats.cov, 40);
@@ -530,7 +545,7 @@ function renderOptimizer(objective) {
     label: s, vol: Math.sqrt(stats.cov[i][i]), ret: stats.mu[i],
   }));
   const marks = [{ label: 'Current', vol: cur.vol, ret: cur.ret, color: PORT_COLOR[which] }];
-  if (opt) marks.push({ label: OBJ_LABEL[objective], vol: opt.vol, ret: opt.ret, color: 'var(--gold)' });
+  if (opt) marks.push({ label: objLabel(objective, target), vol: opt.vol, ret: opt.ret, color: 'var(--gold)' });
   frontierChart($('frontierChart'), frontier, assetDots, marks);
 
   if (!opt) {
@@ -555,12 +570,26 @@ function renderOptimizer(objective) {
     </div>`;
   }).join('');
 
-  out.innerHTML = `
+  /* If the requested target sits outside what these holdings can reach, say so
+     plainly and show what was solved instead — never present a clamped answer
+     as though it met the request. */
+  let infeasible = '';
+  if (opt.target && !opt.target.feasible) {
+    const isVol = objective === 'targetvol';
+    const unit = isVol ? 'volatility' : 'return';
+    const reachable = FMT.pct(opt.target.min, 1) + ' – ' + FMT.pct(opt.target.max, 1);
+    infeasible = `<div class="opt-warn"><b>${FMT.pct(target, 1)} ${unit} isn’t reachable</b>
+      with these holdings — the frontier spans ${reachable}.
+      Showing the closest achievable portfolio (${FMT.pct(opt.target.achieved, 1)} ${unit}) instead.
+      Add a ${isVol ? (opt.target.bound === 'low' ? 'lower-risk' : 'higher-risk') : (opt.target.bound === 'high' ? 'higher-returning' : 'lower-returning')} holding to widen the range.</div>`;
+  }
+
+  out.innerHTML = infeasible + `
     <div class="opt-compare">
       <div class="oc-col"><div class="oc-h">Current</div>
         <div class="oc-v">${FMT.num(cur.sharpe)}</div><div class="oc-k">Sharpe</div>
         <div class="oc-sub">${FMT.pct(cur.ret, 1)} return · ${FMT.pct(cur.vol, 1)} vol</div></div>
-      <div class="oc-col opt"><div class="oc-h">${esc(OBJ_LABEL[objective])}</div>
+      <div class="oc-col opt"><div class="oc-h">${esc(objLabel(objective, target))}</div>
         <div class="oc-v">${FMT.num(opt.sharpe)}</div><div class="oc-k">Sharpe ${delta(opt.sharpe, cur.sharpe)}</div>
         <div class="oc-sub">${FMT.pct(opt.ret, 1)} return · ${FMT.pct(opt.vol, 1)} vol</div></div>
     </div>
@@ -574,7 +603,7 @@ function renderOptimizer(objective) {
     state.portfolios[which] = run.syms.map((s, i) => ({ sym: s, weight: +(opt.weights[i] * 100).toFixed(2) }));
     if (state.compare) { state.active = which; syncCompareUI(); }
     renderHoldings();
-    setStatus('Applied ' + OBJ_LABEL[objective].toLowerCase() + ' weights to Portfolio ' + which
+    setStatus('Applied ' + objLabel(objective, target) + ' weights to Portfolio ' + which
       + ' — hit Analyze to backtest them.', 'ok');
     document.querySelector('.builder-tools').scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
@@ -583,7 +612,14 @@ function renderOptimizer(objective) {
 const OBJ_LABEL = {
   sharpe: 'Max Sharpe', minvol: 'Min volatility',
   parity: 'Risk parity', equal: 'Equal weight',
+  targetvol: 'Max return', targetret: 'Min volatility',
 };
+/* Constrained objectives read better with the target baked into the label. */
+function objLabel(objective, target) {
+  if (objective === 'targetvol') return 'Max return @ ' + FMT.pct(target, 1) + ' vol';
+  if (objective === 'targetret') return 'Min vol @ ' + FMT.pct(target, 1) + ' return';
+  return OBJ_LABEL[objective] || 'Optimized';
+}
 
 /* ---------------------------- Monte Carlo ------------------------------ */
 function mcWhich() {
@@ -682,6 +718,15 @@ function bindEvents() {
     if (!b || !state.last) return;
     $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.classList.toggle('on', x === b));
     renderOptimizer(b.dataset.obj);
+  });
+  // Enter in a target box solves it, rather than doing nothing
+  [['tgtVol', 'targetvol'], ['tgtRet', 'targetret']].forEach(([id, obj]) => {
+    $(id).addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || !state.last) return;
+      e.preventDefault();
+      $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.classList.toggle('on', x.dataset.obj === obj));
+      renderOptimizer(obj);
+    });
   });
   ['mcInitial', 'mcMonthly', 'mcYears', 'mcGoal'].forEach(id => $(id).addEventListener('input', debounce(runMonteCarlo, 250)));
 

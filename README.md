@@ -68,6 +68,16 @@ fully invested** (`w ≥ 0`, `Σw = 1`) — no shorting, no leverage.
 | **Min volatility** | Smallest achievable portfolio variance |
 | **Risk parity** | Every holding contributes an equal share of total risk |
 | **Equal weight** | The naive `1/n` baseline, for reference |
+| **Max return at a given volatility** | "I can live with 12% volatility — get me the most return available at that risk" |
+| **Min volatility for a given return** | "I need 8% a year — get me there with the least risk" |
+
+The last two are the constrained duals of the same frontier. Both are solved by
+bisecting `γ`, since return and volatility each increase monotonically along the
+frontier — no extra constraint machinery needed. Each box shows the **reachable
+range** for the current holdings, and if you ask for something outside it the app
+says so, reports the closest achievable portfolio, and tells you what kind of
+holding would widen the range — rather than quietly returning a clamped answer
+as if it met the request.
 
 The **efficient frontier** is traced by sweeping a risk-aversion parameter `γ`
 through `min wᵀΣw − γ(w·μ)`, solved with projected gradient descent onto the

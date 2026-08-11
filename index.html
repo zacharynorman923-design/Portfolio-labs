@@ -200,6 +200,25 @@
         <button class="chip-btn" data-obj="parity">Risk parity</button>
         <button class="chip-btn" data-obj="equal">Equal weight</button>
       </div>
+
+      <div class="opt-targets">
+        <div class="tgt">
+          <label class="tgt-lab" for="tgtVol">Most return I can get at a volatility of</label>
+          <div class="tgt-row">
+            <input id="tgtVol" type="number" step="0.5" min="0" inputmode="decimal"><span class="tgt-pct">%</span>
+            <button class="chip-btn" data-obj="targetvol">Solve</button>
+          </div>
+          <div class="tgt-range" id="volRange"></div>
+        </div>
+        <div class="tgt">
+          <label class="tgt-lab" for="tgtRet">Least volatility for a return of</label>
+          <div class="tgt-row">
+            <input id="tgtRet" type="number" step="0.5" inputmode="decimal"><span class="tgt-pct">%</span>
+            <button class="chip-btn" data-obj="targetret">Solve</button>
+          </div>
+          <div class="tgt-range" id="retRange"></div>
+        </div>
+      </div>
       <div id="optOut" class="opt-out"></div>
       <div class="chart" id="frontierChart"></div>
     </section>

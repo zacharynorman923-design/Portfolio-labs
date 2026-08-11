@@ -153,6 +153,46 @@ function maxSharpe(mu, cov, rf) {
   return best.w;
 }
 
+/* ------------------- constrained targets along the frontier -------------- *
+   Two classic dual problems:
+
+     • maximum return for a given volatility
+     • minimum volatility for a given return
+
+   Both sit on the efficient frontier, and along that frontier return and
+   volatility each increase monotonically with the risk-aversion parameter γ.
+   So instead of adding an inequality constraint, bisect γ until the frontier
+   portfolio hits the requested figure. Reuses the solver already verified for
+   the unconstrained objectives.
+
+   `metric` is 'vol' or 'ret'. Returns the portfolio plus an honest account of
+   whether the target was actually reachable. */
+function frontierTarget(mu, cov, metric, target, rf) {
+  const muScale = Math.max(...mu.map(Math.abs)) || 1;
+  const gMax = 10 * covScale(cov) / muScale;
+  const measure = (w) => metric === 'vol' ? portVol(w, cov) : portReturn(w, mu);
+
+  const wLo = meanVarianceGamma(cov, mu, 0, 8000);       // min-variance end
+  const wHi = meanVarianceGamma(cov, mu, gMax, 8000);    // max-return end
+  const lo = measure(wLo), hi = measure(wHi);
+
+  if (target <= lo + 1e-9) {
+    return { w: wLo, feasible: target >= lo - 1e-9, achieved: lo, min: lo, max: hi, bound: 'low' };
+  }
+  if (target >= hi - 1e-9) {
+    return { w: wHi, feasible: target <= hi + 1e-9, achieved: hi, min: lo, max: hi, bound: 'high' };
+  }
+
+  let a = 0, b = gMax, w = wLo;
+  for (let k = 0; k < 44; k++) {
+    const mid = (a + b) / 2;
+    w = meanVarianceGamma(cov, mu, mid, 2500);
+    if (measure(w) < target) a = mid; else b = mid;
+  }
+  w = meanVarianceGamma(cov, mu, (a + b) / 2, 9000);     // final precise solve
+  return { w, feasible: true, achieved: measure(w), min: lo, max: hi, bound: null };
+}
+
 /* Fractional risk contributions: RC_i = w_i (Σw)_i / wᵀΣw, summing to 1. */
 function riskContributions(w, cov) {
   const mv = matVec(cov, w);
@@ -195,12 +235,15 @@ function riskParity(cov, iters) {
 
 /* ------------------------------ entry point ----------------------------- */
 /* Runs one objective and returns everything the UI needs to explain it. */
-function optimizePortfolio(stats, objective, rf) {
+function optimizePortfolio(stats, objective, rf, target) {
   const { mu, cov, syms } = stats;
-  let w;
+  let w, info = null;
+
   if (objective === 'minvol')      w = minVariance(cov, 8000);
   else if (objective === 'sharpe') w = maxSharpe(mu, cov, rf);
   else if (objective === 'parity') w = riskParity(cov);
+  else if (objective === 'targetvol') { info = frontierTarget(mu, cov, 'vol', target, rf); w = info.w; }
+  else if (objective === 'targetret') { info = frontierTarget(mu, cov, 'ret', target, rf); w = info.w; }
   else                             w = new Array(mu.length).fill(1 / mu.length);
 
   // scrub numerical dust so the suggested weights read cleanly
@@ -214,6 +257,19 @@ function optimizePortfolio(stats, objective, rf) {
     vol: portVol(w, cov),
     sharpe: portSharpe(w, mu, cov, rf),
     rc: riskContributions(w, cov),
+    target: info,          // null unless a constrained target was requested
+  };
+}
+
+/* Achievable range of the frontier, for prefilling and validating targets. */
+function frontierRange(mu, cov) {
+  const muScale = Math.max(...mu.map(Math.abs)) || 1;
+  const gMax = 10 * covScale(cov) / muScale;
+  const wLo = meanVarianceGamma(cov, mu, 0, 8000);
+  const wHi = meanVarianceGamma(cov, mu, gMax, 8000);
+  return {
+    minVol: portVol(wLo, cov), maxVol: portVol(wHi, cov),
+    minRet: portReturn(wLo, mu), maxRet: portReturn(wHi, mu),
   };
 }
 
