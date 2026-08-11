@@ -1,7 +1,6 @@
 /* Portfolio Labs service worker — offline app shell + font caching.
-   Scoped to the /portfolio-labs/ folder so it never touches the SPLIT app
-   or its service worker at the site root. */
-const VERSION = 'plabs-v1';
+   Bump VERSION on every release so clients discard the old cached shell. */
+const VERSION = 'plabs-v2';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 

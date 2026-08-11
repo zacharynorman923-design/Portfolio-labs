@@ -73,10 +73,12 @@ function growthChart(el, series, opts = {}) {
 }
 
 /* ---------------------------- drawdown (underwater) --------------------- */
-function drawdownChart(el, dates, dd) {
+/* `overlay` optionally draws a second portfolio's drawdown as a line on the
+   same axes, so two allocations can be compared underwater. */
+function drawdownChart(el, dates, dd, overlay) {
   const W = 860, H = 200, P = { t: 12, r: 16, b: 26, l: 56 };
   if (!dd || dd.length < 2) { el.innerHTML = ''; return; }
-  const min = Math.min(...dd, -0.0001);
+  const min = Math.min(...dd, ...(overlay && overlay.dd ? overlay.dd : []), -0.0001);
   const X = scaler(0, dd.length - 1, P.l, W - P.r);
   const Y = scaler(min, 0, H - P.b, P.t);
   let area = 'M' + X(0).toFixed(1) + ' ' + Y(0).toFixed(1);
@@ -90,8 +92,14 @@ function drawdownChart(el, dates, dd) {
   });
   let xt = '';
   yearTicks(dates).forEach(t => { xt += `<text class="c-axis" x="${X(t.i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${t.label}</text>`; });
+  let over = '';
+  if (overlay && overlay.dd && overlay.dd.length === dd.length) {
+    let d = '';
+    overlay.dd.forEach((v, i) => { d += (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1); });
+    over = `<path d="${d}" fill="none" stroke="${overlay.color || 'var(--accent-2)'}" stroke-width="1.6"/>`;
+  }
   el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Drawdowns">`
-    + grid + `<path d="${area}" fill="var(--down-soft)" stroke="var(--down)" stroke-width="1.2"/>` + xt + `</svg>`;
+    + grid + `<path d="${area}" fill="var(--down-soft)" stroke="var(--down)" stroke-width="1.2"/>` + over + xt + `</svg>`;
 }
 
 /* ------------------------------- donut ---------------------------------- */

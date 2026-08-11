@@ -2,16 +2,19 @@
    Portfolio Labs — app: state, data fetching, rendering, interactions
    ========================================================================= */
 
-const PORT_STORE  = 'plabs_portfolio_v1';
+const PORT_STORE  = 'plabs_portfolio_v2';
 const THEME_STORE = 'plabs_theme_v1';
 const CACHE_PREFIX = 'plabs_cache_';
+const DIV_PREFIX   = 'plabs_div_';
 const CACHE_TTL = 12 * 3600 * 1000; // 12h — be gentle on free API tiers
 
 /* ------------------------------- state --------------------------------- */
 const state = {
-  holdings: [],          // [{ sym, weight }]  weight = percent
+  portfolios: { A: [], B: [] },   // each: [{ sym, weight }]  weight = percent
+  active: 'A',                    // which one the builder is editing
+  compare: false,
   demoMode: false,
-  last: null,            // cached analysis result (for Monte Carlo re-runs)
+  last: null,                     // cached analysis (for Monte Carlo re-runs)
 };
 
 const $  = (id) => document.getElementById(id);
@@ -21,32 +24,42 @@ const el = {
   runStatus: $('runStatus'), empty: $('empty'), results: $('results'),
   settingsPanel: $('settingsPanel'), providerSel: $('providerSel'),
   apiKey: $('apiKey'), keyLink: $('keyLink'), dataMode: $('dataMode'),
+  abTabs: $('abTabs'), cacheNote: $('cacheNote'),
 };
+
+/* Portfolio currently being edited. */
+function holdings() { return state.portfolios[state.active]; }
+/* Which portfolios take part in an analysis. */
+function activeKeys() { return state.compare ? ['A', 'B'] : ['A']; }
+
+const PORT_COLOR = { A: 'var(--accent)', B: 'var(--accent-2)' };
 
 /* ------------------------------- init ---------------------------------- */
 function init() {
-  // theme
   try {
     const t = localStorage.getItem(THEME_STORE);
     if (t) document.documentElement.setAttribute('data-theme', t);
   } catch (e) {}
 
-  // data source UI
   el.providerSel.value = DataFeed.provider;
   el.apiKey.value = DataFeed.apiKey;
   updateKeyLink();
   updateDataMode();
 
-  // restore saved portfolio
   try {
     const saved = JSON.parse(localStorage.getItem(PORT_STORE) || 'null');
-    if (saved && Array.isArray(saved.holdings)) {
-      state.holdings = saved.holdings.filter(h => h.sym);
+    if (saved && saved.portfolios) {
+      state.portfolios.A = (saved.portfolios.A || []).filter(h => h.sym);
+      state.portfolios.B = (saved.portfolios.B || []).filter(h => h.sym);
+      state.compare = !!saved.compare;
       if (saved.settings) applySettings(saved.settings);
     }
   } catch (e) {}
-  if (!state.holdings.length) state.holdings = [{ sym: 'VTI', weight: 60 }, { sym: 'BND', weight: 40 }];
+  if (!state.portfolios.A.length) state.portfolios.A = [{ sym: 'VTI', weight: 60 }, { sym: 'BND', weight: 40 }];
+  if (!state.portfolios.B.length) state.portfolios.B = [{ sym: 'VTI', weight: 100 }];
 
+  $('compareToggle').checked = state.compare;
+  syncCompareUI();
   renderSuggest();
   renderLazy();
   renderHoldings();
@@ -58,25 +71,38 @@ function applySettings(s) {
   if (s.bench != null)  $('benchSel').value = s.bench;
   if (s.rebal != null)  $('rebalSel').value = s.rebal;
   if (s.rf != null)     $('rfInput').value = s.rf;
+  if (s.tr != null)     $('totalReturnToggle').checked = !!s.tr;
 }
 function currentSettings() {
   return {
     period: $('periodSel').value, bench: $('benchSel').value,
     rebal: $('rebalSel').value, rf: $('rfInput').value,
+    tr: $('totalReturnToggle').checked,
   };
 }
 function persist() {
-  try { localStorage.setItem(PORT_STORE, JSON.stringify({ holdings: state.holdings, settings: currentSettings() })); } catch (e) {}
+  try {
+    localStorage.setItem(PORT_STORE, JSON.stringify({
+      portfolios: state.portfolios, compare: state.compare, settings: currentSettings(),
+    }));
+  } catch (e) {}
 }
 
 /* ----------------------------- rendering ------------------------------- */
-function totalWeight() { return state.holdings.reduce((s, h) => s + (+h.weight || 0), 0); }
+function totalWeight() { return holdings().reduce((s, h) => s + (+h.weight || 0), 0); }
+
+function paintWeightTag() {
+  const tw = totalWeight();
+  el.weightTag.textContent = 'weights ' + tw.toFixed(0) + '%';
+  el.weightTag.className = 'tag' + (Math.abs(tw - 100) < 0.5 ? ' ok' : (tw > 0 ? ' warn' : ''));
+}
 
 function renderHoldings() {
-  if (!state.holdings.length) {
+  const hs = holdings();
+  if (!hs.length) {
     el.holdings.innerHTML = '<div class="no-holds">No holdings yet — add tickers below.</div>';
   } else {
-    el.holdings.innerHTML = state.holdings.map((h, i) => {
+    el.holdings.innerHTML = hs.map((h, i) => {
       const meta = assetMeta(h.sym);
       const dot = SLICE_COLORS[i % SLICE_COLORS.length];
       return `<div class="hold-row">
@@ -91,9 +117,7 @@ function renderHoldings() {
       </div>`;
     }).join('');
   }
-  const tw = totalWeight();
-  el.weightTag.textContent = 'weights ' + tw.toFixed(0) + '%';
-  el.weightTag.className = 'tag' + (Math.abs(tw - 100) < 0.5 ? ' ok' : (tw > 0 ? ' warn' : ''));
+  paintWeightTag();
   persist();
 }
 
@@ -111,30 +135,46 @@ function renderLazy() {
      </button>`).join('');
 }
 
+/* --------------------------- A / B controls ---------------------------- */
+function syncCompareUI() {
+  el.abTabs.classList.toggle('hidden', !state.compare);
+  $('mcWhich').classList.toggle('hidden', !state.compare);
+  if (!state.compare) state.active = 'A';
+  el.abTabs.querySelectorAll('.ab-tab').forEach(b => {
+    b.setAttribute('aria-selected', b.dataset.port === state.active ? 'true' : 'false');
+  });
+}
+function setActive(which) {
+  state.active = which;
+  syncCompareUI();
+  renderHoldings();
+}
+
 /* ---------------------------- holdings ops ----------------------------- */
 function addHolding(sym) {
   sym = (sym || '').trim().toUpperCase();
   if (!sym) return;
-  if (state.holdings.some(h => h.sym === sym)) { flash(el.tickerInput); return; }
+  const hs = holdings();
+  if (hs.some(h => h.sym === sym)) { flash(el.tickerInput); return; }
   const remaining = Math.max(0, 100 - totalWeight());
-  state.holdings.push({ sym, weight: remaining > 0 ? Math.round(remaining) : 10 });
+  hs.push({ sym, weight: remaining > 0 ? Math.round(remaining) : 10 });
   renderHoldings();
 }
-function removeHolding(i) { state.holdings.splice(i, 1); renderHoldings(); }
+function removeHolding(i) { holdings().splice(i, 1); renderHoldings(); }
 function evenWeights() {
-  const n = state.holdings.length; if (!n) return;
-  const w = +(100 / n).toFixed(2);
-  state.holdings.forEach(h => h.weight = w);
+  const hs = holdings(); if (!hs.length) return;
+  const w = +(100 / hs.length).toFixed(2);
+  hs.forEach(h => h.weight = w);
   renderHoldings();
 }
 function normalizeWeights() {
   const t = totalWeight(); if (t <= 0) return;
-  state.holdings.forEach(h => h.weight = +((h.weight / t) * 100).toFixed(2));
+  holdings().forEach(h => h.weight = +((h.weight / t) * 100).toFixed(2));
   renderHoldings();
 }
 function loadLazy(i) {
   const p = LAZY[i]; if (!p) return;
-  state.holdings = p.holds.map(h => ({ sym: h[0], weight: h[1] }));
+  state.portfolios[state.active] = p.holds.map(h => ({ sym: h[0], weight: h[1] }));
   renderHoldings();
   el.tickerInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
@@ -155,74 +195,154 @@ function updateDataMode() {
 }
 
 /* ----------------------------- data fetch ------------------------------ */
-/* Returns [{date, close}] ascending for a symbol, from cache / demo / live. */
-async function fetchDaily(sym) {
+/* Price history for a symbol: demo, cache, or live. `force` skips the cache. */
+async function fetchDaily(sym, force) {
   if (state.demoMode) {
     const d = buildDemoSeries(sym);
     if (!d) throw new Error('"' + sym + '" isn’t in the demo set. Demo covers: ' + DEMO_SYMBOLS.join(', ') + '.');
     return d;
   }
   const ck = CACHE_PREFIX + DataFeed.provider + '_' + sym;
-  try {
-    const hit = JSON.parse(localStorage.getItem(ck) || 'null');
-    if (hit && (Date.now() - hit.t) < CACHE_TTL && Array.isArray(hit.v) && hit.v.length) return hit.v;
-  } catch (e) {}
+  if (!force) {
+    try {
+      const hit = JSON.parse(localStorage.getItem(ck) || 'null');
+      if (hit && (Date.now() - hit.t) < CACHE_TTL && Array.isArray(hit.v) && hit.v.length) return hit.v;
+    } catch (e) {}
+  }
   const v = await DataFeed.daily(sym);
   try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), v })); } catch (e) {}
   return v;
 }
 
+/* Dividend history, cached the same way. Never throws — a failure just means
+   we fall back to price-only for that symbol and say so in the UI. */
+async function fetchDividends(sym, force) {
+  if (state.demoMode) return { list: [], ok: true };
+  const ck = DIV_PREFIX + DataFeed.provider + '_' + sym;
+  if (!force) {
+    try {
+      const hit = JSON.parse(localStorage.getItem(ck) || 'null');
+      if (hit && (Date.now() - hit.t) < CACHE_TTL && Array.isArray(hit.v)) return { list: hit.v, ok: true };
+    } catch (e) {}
+  }
+  try {
+    const v = await DataFeed.dividends(sym);
+    try { localStorage.setItem(ck, JSON.stringify({ t: Date.now(), v })); } catch (e) {}
+    return { list: v, ok: true };
+  } catch (err) {
+    return { list: [], ok: false, reason: err.message };
+  }
+}
+
+/* Age of the oldest cached series in play, for the "prices cached N ago" note. */
+function cacheAgeNote(symbols) {
+  if (state.demoMode) { el.cacheNote.textContent = ''; return; }
+  let oldest = 0;
+  symbols.forEach(s => {
+    try {
+      const hit = JSON.parse(localStorage.getItem(CACHE_PREFIX + DataFeed.provider + '_' + s) || 'null');
+      if (hit && hit.t) oldest = Math.max(oldest, Date.now() - hit.t);
+    } catch (e) {}
+  });
+  if (!oldest) { el.cacheNote.textContent = ''; return; }
+  const mins = Math.round(oldest / 60000);
+  el.cacheNote.textContent = 'Prices cached ' + (mins < 60 ? mins + ' min' : Math.round(mins / 60) + ' h')
+    + ' ago · “Refresh data” fetches new ones.';
+}
+
 /* ------------------------------ analyze -------------------------------- */
-async function analyze() {
-  const holds = state.holdings.filter(h => (+h.weight) > 0 && h.sym);
-  if (!holds.length) { setStatus('Add at least one holding with a weight above 0.', 'err'); return; }
+async function analyze(force) {
+  const keys = activeKeys();
+  const sets = {};
+  for (const k of keys) {
+    const hs = state.portfolios[k].filter(h => (+h.weight) > 0 && h.sym);
+    if (!hs.length) {
+      setStatus('Portfolio ' + k + ' needs at least one holding with a weight above 0.', 'err');
+      return;
+    }
+    sets[k] = hs;
+  }
   if (!state.demoMode && !DataFeed.hasKey()) {
     setStatus('Add a free API key under “Data source”, or click “Explore with demo data”.', 'err');
     openSettings(true); return;
   }
+
   const bench = $('benchSel').value;
   const period = +$('periodSel').value;
   const rebal = $('rebalSel').value;
   const rf = (+$('rfInput').value || 0) / 100;
+  const wantTR = $('totalReturnToggle').checked;
 
-  const holdSyms = holds.map(h => h.sym);
-  const allSyms = bench && !holdSyms.includes(bench) ? holdSyms.concat(bench) : holdSyms.slice();
+  const allSyms = [];
+  keys.forEach(k => sets[k].forEach(h => { if (!allSyms.includes(h.sym)) allSyms.push(h.sym); }));
+  if (bench && !allSyms.includes(bench)) allSyms.push(bench);
 
   setRunning(true);
   const seriesMap = {};
+  const trWarn = [];
   try {
     for (let i = 0; i < allSyms.length; i++) {
-      setStatus('Fetching ' + allSyms[i] + '… (' + (i + 1) + '/' + allSyms.length + ')');
-      seriesMap[allSyms[i]] = await fetchDaily(allSyms[i]);
-      if (!state.demoMode && i < allSyms.length - 1) await sleep(220); // ease rate limits
+      const sym = allSyms[i];
+      setStatus('Fetching ' + sym + '… (' + (i + 1) + '/' + allSyms.length + ')');
+      let series = await fetchDaily(sym, force);
+
+      if (wantTR && !state.demoMode) {
+        const dv = await fetchDividends(sym, force);
+        if (!dv.ok) trWarn.push(sym);
+        if (dv.list && dv.list.length) {
+          const dates = series.map(p => p.date);
+          const adj = applyDividends(dates, series.map(p => p.close), dv.list);
+          series = series.map((p, j) => ({ date: p.date, close: adj[j], rawClose: p.close }));
+        }
+        await sleep(220);
+      }
+      seriesMap[sym] = series;
+      if (!state.demoMode && i < allSyms.length - 1) await sleep(220);
     }
   } catch (err) {
     setRunning(false); setStatus(err.message || 'Could not fetch market data.', 'err'); return;
   }
 
   try {
-    // align holdings + benchmark on a shared calendar, then slice the window
     let aligned = alignSeries(seriesMap, allSyms);
     aligned = sliceYears(aligned, period);
-    if (aligned.dates.length < 25) throw new Error('Not enough overlapping history for these symbols in this period. Try a shorter period or different tickers.');
+    if (aligned.dates.length < 25) {
+      throw new Error('Not enough overlapping history for these symbols in this period. Try a shorter period or different tickers.');
+    }
 
-    const wFrac = {}; holds.forEach(h => wFrac[h.sym] = +h.weight);
-    const bt = metricsBundle(aligned, wFrac, rebal, rf);
+    const runs = {};
+    keys.forEach(k => {
+      const w = {}; sets[k].forEach(h => w[h.sym] = +h.weight);
+      const bt = backtest(aligned, w, rebal);
+      bt.metrics = metrics(bt.dates, bt.values, { rf });
+      bt.holds = sets[k];
+      bt.syms = sets[k].map(h => h.sym);
+      runs[k] = bt;
+    });
 
-    let benchBt = null, rel = {};
+    let benchBt = null;
     if (bench) {
       const bAligned = { dates: aligned.dates, closes: { [bench]: aligned.closes[bench] } };
       benchBt = backtest(bAligned, { [bench]: 1 }, 'none');
       benchBt.metrics = metrics(benchBt.dates, benchBt.values, { rf });
-      rel = relativeMetrics(bt.dates, bt.values, benchBt.dates, benchBt.values, rf);
     }
+    keys.forEach(k => {
+      runs[k].rel = benchBt ? relativeMetrics(runs[k].dates, runs[k].values, benchBt.dates, benchBt.values, rf) : {};
+    });
 
-    const corr = holdSyms.length >= 2 ? correlationMatrix(aligned, holdSyms) : null;
-
-    state.last = { holds, holdSyms, bench, bt, benchBt, rel, corr, aligned, rf };
+    state.last = { keys, runs, bench, benchBt, aligned, rf, totalReturn: wantTR, trWarn };
     renderResults(state.last);
     runMonteCarlo();
-    setRunning(false); setStatus('');
+    setRunning(false);
+
+    if (wantTR && trWarn.length) {
+      setStatus('Total return is on, but no dividend data came back for ' + trWarn.join(', ')
+        + ' — those are price-only.', 'warn');
+    } else {
+      setStatus('');
+    }
+    cacheAgeNote(allSyms);
+
     el.results.classList.remove('hidden');
     el.empty.classList.add('hidden');
     requestAnimationFrame(() => el.results.scrollIntoView({ behavior: 'smooth', block: 'start' }));
@@ -231,23 +351,23 @@ async function analyze() {
   }
 }
 
-/* Backtest + full metrics for the portfolio. */
-function metricsBundle(aligned, wFrac, rebal, rf) {
-  const bt = backtest(aligned, wFrac, rebal);
-  const m = metrics(bt.dates, bt.values, { rf });
-  return Object.assign(bt, { metrics: m });
-}
-
 /* ----------------------------- results UI ------------------------------ */
 function renderResults(R) {
-  const m = R.bt.metrics;
-  // headline
+  const A = R.runs.A, m = A.metrics;
+  const cmp = R.keys.length > 1 ? R.runs.B : null;
+  const modeBits = [
+    FMT.date(m.startDate) + ' → ' + FMT.date(m.endDate),
+    m.years.toFixed(1) + ' yrs',
+    state.demoMode ? 'demo data' : PROVIDERS[DataFeed.provider].label,
+    R.totalReturn ? 'total return' : 'price return',
+  ];
+
   $('resultHead').innerHTML = `
     <div class="rh-top">
       <div>
-        <div class="rh-label">${FMT.date(m.startDate)} → ${FMT.date(m.endDate)} · ${m.years.toFixed(1)} yrs · ${state.demoMode ? 'demo data' : esc(PROVIDERS[DataFeed.provider].label)}</div>
-        <div class="rh-value">${FMT.money(m.endValue, 0)}</div>
-        <div class="rh-sub">from ${FMT.money(m.startValue, 0)} · <span class="${signClass(m.totalReturn)}">${FMT.signedPct(m.totalReturn)}</span> total</div>
+        <div class="rh-label">${esc(modeBits.join(' · '))}</div>
+        <div class="rh-value">${FMT.money(m.endValue, 0)}${cmp ? ' <span class="rh-vs">vs</span> <span class="rh-b">' + FMT.money(cmp.metrics.endValue, 0) + '</span>' : ''}</div>
+        <div class="rh-sub">from ${FMT.money(m.startValue, 0)} · ${cmp ? 'A ' : ''}<span class="${signClass(m.totalReturn)}">${FMT.signedPct(m.totalReturn)}</span>${cmp ? ' · B <span class="' + signClass(cmp.metrics.totalReturn) + '">' + FMT.signedPct(cmp.metrics.totalReturn) + '</span>' : ' total'}</div>
       </div>
     </div>
     <div class="stat-strip">
@@ -261,8 +381,8 @@ function renderResults(R) {
   renderQuotes(R);
   renderGrowth(R);
   renderMetricsTable(R);
-  renderDonut(R);
-  drawdownChart($('ddChart'), R.bt.dates, m.ddSeries);
+  renderDonuts(R);
+  renderDrawdown(R);
   yearBars($('yearChart'), m.yearly);
   renderCorr(R);
 }
@@ -271,10 +391,13 @@ function statCard(k, v, cls) {
   return `<div class="sc"><div class="sc-k">${k}</div><div class="sc-v ${cls}">${v}</div></div>`;
 }
 
-/* "Live quotes" from the most recent closes in the fetched history. */
+/* Latest close per holding — raw price when total-return mode rebased them. */
 function renderQuotes(R) {
-  const rows = R.holdSyms.map((s, i) => {
-    const ser = R.aligned.closes[s];
+  const syms = [];
+  R.keys.forEach(k => R.runs[k].syms.forEach(s => { if (!syms.includes(s)) syms.push(s); }));
+  const src = R.aligned.raw || R.aligned.closes;
+  $('quotes').innerHTML = syms.map((s, i) => {
+    const ser = src[s] || R.aligned.closes[s];
     const last = ser[ser.length - 1], prev = ser[ser.length - 2];
     const chg = prev ? (last / prev - 1) : 0;
     const dot = SLICE_COLORS[i % SLICE_COLORS.length];
@@ -284,12 +407,14 @@ function renderQuotes(R) {
       <div class="q-chg ${signClass(chg)}">${FMT.signedPct(chg)}</div>
     </div>`;
   }).join('');
-  $('quotes').innerHTML = rows;
   $('quotesTag').textContent = state.demoMode ? 'demo' : 'latest close';
 }
 
 function renderGrowth(R) {
-  const series = [{ dates: R.bt.dates, values: R.bt.values, color: 'var(--accent)', label: 'Portfolio' }];
+  const series = R.keys.map(k => ({
+    dates: R.runs[k].dates, values: R.runs[k].values,
+    color: PORT_COLOR[k], label: R.keys.length > 1 ? 'Portfolio ' + k : 'Portfolio',
+  }));
   if (R.benchBt) series.push({ dates: R.benchBt.dates, values: R.benchBt.values, color: 'var(--muted-line)', label: R.bench });
   growthChart($('growthChart'), series, { log: $('logToggle').checked });
   $('growthLegend').innerHTML = series.map(s =>
@@ -297,48 +422,83 @@ function renderGrowth(R) {
 }
 
 function renderMetricsTable(R) {
-  const m = R.bt.metrics, b = R.benchBt ? R.benchBt.metrics : null;
+  const two = R.keys.length > 1;
+  const A = R.runs.A.metrics, B = two ? R.runs.B.metrics : null;
+  const b = R.benchBt ? R.benchBt.metrics : null;
+  const yr = (y) => y ? y.year + ' · ' + FMT.signedPct(y.r, 1) : '—';
+
   const rows = [
-    ['Total return', FMT.signedPct(m.totalReturn), b && FMT.signedPct(b.totalReturn)],
-    ['CAGR', FMT.signedPct(m.cagr), b && FMT.signedPct(b.cagr)],
-    ['Volatility (ann.)', FMT.pct(m.volatility), b && FMT.pct(b.volatility)],
-    ['Sharpe ratio', FMT.num(m.sharpe), b && FMT.num(b.sharpe)],
-    ['Sortino ratio', FMT.num(m.sortino), b && FMT.num(b.sortino)],
-    ['Calmar ratio', FMT.num(m.calmar), b && FMT.num(b.calmar)],
-    ['Max drawdown', FMT.pct(m.maxDrawdown), b && FMT.pct(b.maxDrawdown)],
-    ['Best year', m.bestYear ? m.bestYear.year + ' · ' + FMT.signedPct(m.bestYear.r, 1) : '—', b && b.bestYear ? b.bestYear.year + ' · ' + FMT.signedPct(b.bestYear.r, 1) : '—'],
-    ['Worst year', m.worstYear ? m.worstYear.year + ' · ' + FMT.signedPct(m.worstYear.r, 1) : '—', b && b.worstYear ? b.worstYear.year + ' · ' + FMT.signedPct(b.worstYear.r, 1) : '—'],
-    ['Positive months', FMT.pct(m.positiveMonths, 0), b && FMT.pct(b.positiveMonths, 0)],
-    ['Monthly VaR 95%', FMT.pct(m.var95), b && FMT.pct(b.var95)],
-    ['Monthly CVaR 95%', FMT.pct(m.cvar95), b && FMT.pct(b.cvar95)],
+    ['Total return', FMT.signedPct(A.totalReturn), B && FMT.signedPct(B.totalReturn), b && FMT.signedPct(b.totalReturn)],
+    ['CAGR', FMT.signedPct(A.cagr), B && FMT.signedPct(B.cagr), b && FMT.signedPct(b.cagr)],
+    ['Volatility (ann.)', FMT.pct(A.volatility), B && FMT.pct(B.volatility), b && FMT.pct(b.volatility)],
+    ['Sharpe ratio', FMT.num(A.sharpe), B && FMT.num(B.sharpe), b && FMT.num(b.sharpe)],
+    ['Sortino ratio', FMT.num(A.sortino), B && FMT.num(B.sortino), b && FMT.num(b.sortino)],
+    ['Calmar ratio', FMT.num(A.calmar), B && FMT.num(B.calmar), b && FMT.num(b.calmar)],
+    ['Max drawdown', FMT.pct(A.maxDrawdown), B && FMT.pct(B.maxDrawdown), b && FMT.pct(b.maxDrawdown)],
+    ['Best year', yr(A.bestYear), B && yr(B.bestYear), b && yr(b.bestYear)],
+    ['Worst year', yr(A.worstYear), B && yr(B.worstYear), b && yr(b.worstYear)],
+    ['Positive months', FMT.pct(A.positiveMonths, 0), B && FMT.pct(B.positiveMonths, 0), b && FMT.pct(b.positiveMonths, 0)],
+    ['Monthly VaR 95%', FMT.pct(A.var95), B && FMT.pct(B.var95), b && FMT.pct(b.var95)],
+    ['Monthly CVaR 95%', FMT.pct(A.cvar95), B && FMT.pct(B.cvar95), b && FMT.pct(b.cvar95)],
   ];
-  if (R.rel && R.rel.beta != null) {
-    rows.push(['Beta vs ' + R.bench, FMT.num(R.rel.beta), '1.00']);
-    rows.push(['Alpha (ann.)', FMT.signedPct(R.rel.alpha), '—']);
-    rows.push(['Correlation vs ' + R.bench, FMT.num(R.rel.correlation), '1.00']);
+  const relA = R.runs.A.rel, relB = two ? R.runs.B.rel : null;
+  if (relA && relA.beta != null) {
+    rows.push(['Beta vs ' + R.bench, FMT.num(relA.beta), relB && FMT.num(relB.beta), '1.00']);
+    rows.push(['Alpha (ann.)', FMT.signedPct(relA.alpha), relB && FMT.signedPct(relB.alpha), '—']);
+    rows.push(['Correlation vs ' + R.bench, FMT.num(relA.correlation), relB && FMT.num(relB.correlation), '1.00']);
   }
-  const head = `<div class="mt-row mt-head"><span>Metric</span><span>Portfolio</span><span>${R.bench ? esc(R.bench) : ''}</span></div>`;
+
+  const cls = two ? 'mt-row three' : 'mt-row';
+  const head = `<div class="${cls} mt-head"><span>Metric</span><span>${two ? 'A' : 'Portfolio'}</span>`
+    + (two ? '<span>B</span>' : '') + `<span>${R.bench ? esc(R.bench) : ''}</span></div>`;
   $('metricsTable').innerHTML = head + rows.map(r =>
-    `<div class="mt-row"><span class="mt-k">${r[0]}</span><span class="mt-v">${r[1]}</span><span class="mt-b">${r[2] || '—'}</span></div>`).join('');
+    `<div class="${cls}"><span class="mt-k">${r[0]}</span><span class="mt-v">${r[1]}</span>`
+    + (two ? `<span class="mt-v mt-b2">${r[2] || '—'}</span>` : '')
+    + `<span class="mt-b">${r[3] || '—'}</span></div>`).join('');
 }
 
-function renderDonut(R) {
-  const t = R.holds.reduce((s, h) => s + (+h.weight), 0) || 1;
-  const slices = R.holds.map((h, i) => ({ label: h.sym, value: +h.weight / t, color: SLICE_COLORS[i % SLICE_COLORS.length] }));
-  donut($('donut'), slices);
+function renderDonuts(R) {
+  const build = (run) => {
+    const t = run.holds.reduce((s, h) => s + (+h.weight), 0) || 1;
+    return run.holds.map((h, i) => ({ label: h.sym, value: +h.weight / t, color: SLICE_COLORS[i % SLICE_COLORS.length] }));
+  };
+  const two = R.keys.length > 1;
+  donut($('donut'), build(R.runs.A));
+  if (two) {
+    $('donut').insertAdjacentHTML('afterbegin', '<div class="donut-label">Portfolio A</div>');
+    $('donutB').classList.remove('hidden');
+    donut($('donutB'), build(R.runs.B));
+    $('donutB').insertAdjacentHTML('afterbegin', '<div class="donut-label">Portfolio B</div>');
+  } else {
+    $('donutB').classList.add('hidden');
+  }
+}
+
+function renderDrawdown(R) {
+  const two = R.keys.length > 1;
+  drawdownChart($('ddChart'), R.runs.A.dates, R.runs.A.metrics.ddSeries,
+    two ? { dd: R.runs.B.metrics.ddSeries, color: PORT_COLOR.B } : null);
 }
 
 function renderCorr(R) {
   const panel = $('corrPanel');
-  if (!R.corr) { panel.classList.add('hidden'); return; }
+  const which = R.keys.length > 1 ? mcWhich() : 'A';
+  const run = R.runs[which];
+  if (!run || run.syms.length < 2) { panel.classList.add('hidden'); return; }
   panel.classList.remove('hidden');
-  heatmap($('corrChart'), R.corr, R.holdSyms);
+  $('corrTag').textContent = R.keys.length > 1
+    ? 'portfolio ' + which + ' · monthly returns' : 'monthly returns';
+  heatmap($('corrChart'), correlationMatrix(R.aligned, run.syms), run.syms);
 }
 
 /* ---------------------------- Monte Carlo ------------------------------ */
+function mcWhich() {
+  const v = $('mcWhich').value;
+  return (state.last && state.last.runs[v]) ? v : 'A';
+}
 function runMonteCarlo() {
   if (!state.last) return;
-  const hist = state.last.bt.metrics.monthly;
+  const hist = state.last.runs[mcWhich()].metrics.monthly;
   const mc = monteCarlo(hist, {
     years: clampNum($('mcYears').value, 1, 50, 20),
     initial: clampNum($('mcInitial').value, 0, 1e9, 10000),
@@ -362,6 +522,7 @@ function setStatus(msg, kind) { el.runStatus.textContent = msg || ''; el.runStat
 function setRunning(on) {
   const btn = $('runBtn');
   btn.disabled = on;
+  $('refreshBtn').disabled = on;
   btn.innerHTML = on ? 'Analyzing… <span class="arrow spin">◠</span>' : 'Analyze portfolio <span class="arrow">→</span>';
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -384,45 +545,64 @@ function bindEvents() {
 
   el.holdings.addEventListener('input', e => {
     const inp = e.target.closest('.w-in'); if (!inp) return;
-    const i = +inp.dataset.i; state.holdings[i].weight = Math.max(0, +inp.value || 0);
-    const tw = totalWeight();
-    el.weightTag.textContent = 'weights ' + tw.toFixed(0) + '%';
-    el.weightTag.className = 'tag' + (Math.abs(tw - 100) < 0.5 ? ' ok' : (tw > 0 ? ' warn' : ''));
+    holdings()[+inp.dataset.i].weight = Math.max(0, +inp.value || 0);
+    paintWeightTag();
     persist();
   });
   el.holdings.addEventListener('click', e => { const b = e.target.closest('[data-del]'); if (b) removeHolding(+b.dataset.del); });
 
   $('evenBtn').addEventListener('click', evenWeights);
   $('normBtn').addEventListener('click', normalizeWeights);
-  $('clearBtn').addEventListener('click', () => { state.holdings = []; renderHoldings(); });
+  $('clearBtn').addEventListener('click', () => { state.portfolios[state.active] = []; renderHoldings(); });
 
-  $('runBtn').addEventListener('click', analyze);
-  ['periodSel', 'benchSel', 'rebalSel', 'rfInput'].forEach(id => $(id).addEventListener('change', persist));
+  /* A / B comparison */
+  $('compareToggle').addEventListener('change', e => {
+    state.compare = e.target.checked;
+    if (state.compare) state.active = 'A';
+    syncCompareUI(); renderHoldings(); persist();
+  });
+  el.abTabs.addEventListener('click', e => {
+    const t = e.target.closest('[data-port]');
+    if (t) setActive(t.dataset.port);
+  });
+  $('copyAB').addEventListener('click', () => {
+    state.portfolios.B = state.portfolios.A.map(h => ({ sym: h.sym, weight: h.weight }));
+    setActive('B');
+    setStatus('Copied A into B — tweak it, then analyze.', 'ok');
+  });
+
+  $('runBtn').addEventListener('click', () => analyze(false));
+  $('refreshBtn').addEventListener('click', () => {
+    if (state.demoMode) { setStatus('Demo data is generated locally — there’s nothing to refresh.', 'err'); return; }
+    analyze(true);
+  });
+
+  ['periodSel', 'benchSel', 'rebalSel', 'rfInput', 'totalReturnToggle'].forEach(id => $(id).addEventListener('change', persist));
   $('logToggle').addEventListener('change', () => { if (state.last) renderGrowth(state.last); });
+  $('mcWhich').addEventListener('change', () => { runMonteCarlo(); if (state.last) renderCorr(state.last); });
   ['mcInitial', 'mcMonthly', 'mcYears', 'mcGoal'].forEach(id => $(id).addEventListener('input', debounce(runMonteCarlo, 250)));
 
-  // settings
   $('settingsBtn').addEventListener('click', () => openSettings());
   el.providerSel.addEventListener('change', () => { DataFeed.setProvider(el.providerSel.value); updateKeyLink(); updateDataMode(); });
   el.apiKey.addEventListener('input', () => { DataFeed.setKey(el.apiKey.value); if (el.apiKey.value.trim()) state.demoMode = false; updateDataMode(); });
   $('demoBtn').addEventListener('click', () => {
     state.demoMode = true; updateDataMode();
-    if (!state.holdings.length || state.holdings.every(h => !demoAvailable(h.sym))) {
-      state.holdings = [{ sym: 'VTI', weight: 45 }, { sym: 'QQQ', weight: 20 }, { sym: 'BND', weight: 25 }, { sym: 'GLD', weight: 10 }];
+    const usable = state.portfolios.A.length && state.portfolios.A.every(h => demoAvailable(h.sym));
+    if (!usable) {
+      state.portfolios.A = [{ sym: 'VTI', weight: 45 }, { sym: 'QQQ', weight: 20 }, { sym: 'BND', weight: 25 }, { sym: 'GLD', weight: 10 }];
+      state.portfolios.B = [{ sym: 'VTI', weight: 100 }];
       $('benchSel').value = 'SPY';
       renderHoldings();
     }
     openSettings(false);
-    analyze();
+    analyze(false);
   });
 
-  // theme
   $('themeBtn').addEventListener('click', () => {
     const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
     const next = cur === 'light' ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', next);
     try { localStorage.setItem(THEME_STORE, next); } catch (e) {}
-    if (state.last) { renderGrowth(state.last); } // recolor via CSS vars happens automatically
   });
 }
 

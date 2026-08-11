@@ -60,7 +60,19 @@
 
   <!-- --------------------------- builder --------------------------------- -->
   <section class="panel" aria-label="Build your portfolio">
-    <div class="panel-head"><h2>Portfolio</h2><span class="tag" id="weightTag">weights 0%</span></div>
+    <div class="panel-head">
+      <h2>Portfolio</h2>
+      <div class="head-right">
+        <label class="mini-toggle"><input type="checkbox" id="compareToggle"> compare two</label>
+        <span class="tag" id="weightTag">weights 0%</span>
+      </div>
+    </div>
+
+    <div class="ab-tabs hidden" id="abTabs" role="tablist">
+      <button class="ab-tab" data-port="A" role="tab" aria-selected="true">Portfolio A</button>
+      <button class="ab-tab" data-port="B" role="tab" aria-selected="false">Portfolio B</button>
+      <button class="chip-btn ab-copy" id="copyAB" type="button">Copy A → B</button>
+    </div>
 
     <div class="holdings" id="holdings"></div>
 
@@ -113,8 +125,18 @@
       </label>
     </div>
 
-    <button class="run" id="runBtn">Analyze portfolio <span class="arrow">→</span></button>
+    <label class="opt-row">
+      <input type="checkbox" id="totalReturnToggle">
+      <span><b>Total return</b> — reinvest dividends. Adds one request per holding;
+      falls back to price-only for anything without dividend data.</span>
+    </label>
+
+    <div class="run-row">
+      <button class="run" id="runBtn">Analyze portfolio <span class="arrow">→</span></button>
+      <button class="ghost-btn refresh" id="refreshBtn" title="Fetch fresh prices, ignoring the 12-hour cache">↻ Refresh data</button>
+    </div>
     <div class="run-status" id="runStatus" role="status" aria-live="polite"></div>
+    <div class="cache-note" id="cacheNote"></div>
   </section>
 
   <div class="empty" id="empty">Add holdings and hit <b>Analyze</b> to backtest your portfolio ↑</div>
@@ -147,6 +169,7 @@
       <section class="panel">
         <div class="panel-head"><h2>Allocation</h2></div>
         <div id="donut"></div>
+        <div id="donutB" class="donut-b hidden"></div>
       </section>
       <section class="panel">
         <div class="panel-head"><h2>Drawdowns</h2></div>
@@ -160,12 +183,21 @@
     </section>
 
     <section class="panel" id="corrPanel">
-      <div class="panel-head"><h2>Correlations</h2><span class="tag">monthly returns</span></div>
+      <div class="panel-head"><h2>Correlations</h2><span class="tag" id="corrTag">monthly returns</span></div>
       <div class="chart scroll-x" id="corrChart"></div>
     </section>
 
     <section class="panel">
-      <div class="panel-head"><h2>Monte Carlo projection</h2><span class="tag">bootstrapped from history</span></div>
+      <div class="panel-head">
+        <h2>Monte Carlo projection</h2>
+        <div class="head-right">
+          <select id="mcWhich" class="mc-which hidden" aria-label="Which portfolio to project">
+            <option value="A">Portfolio A</option>
+            <option value="B">Portfolio B</option>
+          </select>
+          <span class="tag">bootstrapped from history</span>
+        </div>
+      </div>
       <div class="mc-controls">
         <label class="fld"><span>Starting $</span><input id="mcInitial" type="number" value="10000" inputmode="numeric"></label>
         <label class="fld"><span>Monthly add $</span><input id="mcMonthly" type="number" value="500" inputmode="numeric"></label>

@@ -42,6 +42,34 @@ request limits.
   goal-probability readout.
 - **Model portfolios** — one-click load of real, public "lazy" allocations
   (60/40, Bogleheads Three-Fund, All Weather, Permanent, Golden Butterfly, …).
+- **Compare two portfolios** — flip on *compare two* to build an A and a B and
+  run them side by side: both plotted on the growth and drawdown charts, an
+  extra column in the metrics table, both allocations, and a selector for which
+  one the correlation matrix and Monte Carlo project.
+- **Total return** — optionally reinvest dividends instead of measuring price
+  only (see below).
+- **Refresh data** — prices are cached for 12 hours to protect your free quota;
+  this button forces a fresh pull when you want today's close.
+
+### Total return vs price return
+
+Free daily feeds quote **price only**, so a distribution shows up as a drop in
+the series and the payout is never counted — which understates returns for
+income-heavy holdings like `SCHD`, `VYM` or `BND`.
+
+Ticking **Total return** fetches each holding's dividend history and rebuilds a
+reinvested-distribution index:
+
+```
+TR[0] = P[0]
+TR[i] = TR[i-1] × (P[i] + D[i]) / P[i-1]
+```
+
+Dividends are credited to the first trading day on or after the ex-date, so a
+payout whose ex-date lands on a weekend or holiday still counts. It costs one
+extra request per holding. If a provider returns no dividend data for a symbol,
+that symbol quietly falls back to price-only and the app **says so** rather than
+reporting a number it can't stand behind.
 
 Dark and light themes, responsive down to phone widths, and installable as a
 PWA that works offline.
@@ -79,8 +107,11 @@ Cloudflare Pages) with no build command and `/` as the publish directory.
 
 ## A note on the numbers
 
-Metrics are computed from the price history your provider returns. Free daily
-series are typically **unadjusted** (they don't add dividends back), so total
-returns for high-yield holdings run slightly low versus a dividend-adjusted
-source. This is a research and education tool — **not investment advice**, and
-past performance doesn't predict future results.
+Metrics are computed from the price history your provider returns. Leave
+**Total return** off and you're measuring price return only, which runs low for
+dividend payers; turn it on and returns include reinvested distributions where
+the provider supplies them. Either way the mode is labelled in the results
+header, so you always know which one you're reading.
+
+This is a research and education tool — **not investment advice**, and past
+performance doesn't predict future results.

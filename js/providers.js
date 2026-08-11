@@ -37,7 +37,26 @@ const DataFeed = {
 
   daily(symbol) { return this.meta().daily(symbol, this.apiKey); },
   quote(symbol) { return this.meta().quote(symbol, this.apiKey); },
+  dividends(symbol) { return this.meta().dividends(symbol, this.apiKey); },
 };
+
+/* Dividend payloads vary by provider and plan tier, so parse tolerantly:
+   accept the common date/amount field spellings and drop rows we can't read.
+   Returns [{date:'YYYY-MM-DD', amount:Number}] ascending. An empty list is a
+   legitimate answer (crypto, non-distributing ETFs) — not an error. */
+function parseDividendRows(rows) {
+  const DATE_KEYS = ['ex_date', 'ex_dividend_date', 'exDate', 'date', 'payment_date'];
+  const AMT_KEYS  = ['amount', 'dividend', 'value', 'cash_amount'];
+  const out = [];
+  (rows || []).forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    let d = null, a = null;
+    for (const k of DATE_KEYS) if (r[k]) { d = String(r[k]).slice(0, 10); break; }
+    for (const k of AMT_KEYS) if (r[k] != null && r[k] !== '') { a = parseFloat(r[k]); break; }
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d) && isFinite(a) && a > 0) out.push({ date: d, amount: a });
+  });
+  return out.sort((x, y) => x.date < y.date ? -1 : 1);
+}
 
 /* Small helper: fetch JSON with a friendly timeout + error surface. */
 async function getJSON(url, timeoutMs = 20000) {
@@ -99,6 +118,21 @@ const PROVIDERS = {
       }
       return { price, changePct: isFinite(changePct) ? changePct : 0, name: d.name || '' };
     },
+    /* Dividend history. Resolves to [] when the symbol simply doesn't pay one;
+       throws only on a hard failure so the caller can warn and fall back. */
+    async dividends(symbol, key) {
+      if (!key) throw new Error('Add a Twelve Data API key in Settings.');
+      const url = 'https://api.twelvedata.com/dividends?symbol=' + encodeURIComponent(symbol)
+        + '&range=full&apikey=' + encodeURIComponent(key);
+      const d = await getJSON(url);
+      if (d && d.status === 'error') {
+        const m = String(d.message || '');
+        // "no data" style answers are a legitimate empty result, not a failure
+        if (/not found|no data|not available/i.test(m)) return [];
+        throw new Error(m || 'Dividend data unavailable.');
+      }
+      return parseDividendRows(d && (d.dividends || d.data || d.values));
+    },
   },
 
   /* ------------------------------ Alpha Vantage ---------------------------- */
@@ -132,6 +166,15 @@ const PROVIDERS = {
       const price = parseFloat(q['05. price']);
       const changePct = parseFloat(String(q['10. change percent'] || '').replace('%', ''));
       return { price, changePct: isFinite(changePct) ? changePct : 0, name: '' };
+    },
+    async dividends(symbol, key) {
+      if (!key) throw new Error('Add an Alpha Vantage API key in Settings.');
+      const url = 'https://www.alphavantage.co/query?function=DIVIDENDS&symbol='
+        + encodeURIComponent(symbol) + '&apikey=' + encodeURIComponent(key);
+      const d = await getJSON(url);
+      if (d['Error Message']) return [];                       // symbol pays none / unsupported
+      if (d['Note'] || d['Information']) throw new Error('Alpha Vantage rate limit reached.');
+      return parseDividendRows(d.data || d.dividends);
     },
   },
 };

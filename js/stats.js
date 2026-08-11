@@ -49,7 +49,49 @@ function alignSeries(seriesMap, symbols) {
   const dates = Array.from(common || []).sort();
   const closes = {};
   symbols.forEach(s => { closes[s] = dates.map(d => maps[s][d]); });
-  return { dates, closes };
+  const out = { dates, closes };
+  // when points carry an unadjusted price too, align that in parallel
+  if (symbols.some(s => (seriesMap[s] || []).some(p => p.rawClose != null))) {
+    out.raw = {};
+    symbols.forEach(s => {
+      const m = {};
+      (seriesMap[s] || []).forEach(p => { m[p.date] = p.rawClose != null ? p.rawClose : p.close; });
+      out.raw[s] = dates.map(d => m[d]);
+    });
+  }
+  return out;
+}
+
+/* ------------------- dividend-adjusted (total return) ------------------- *
+   Free daily feeds quote PRICE only, so a distribution shows up as a drop in
+   the series and the payout itself is never counted. This rebuilds a
+   total-return index assuming each dividend is reinvested on its ex-date:
+
+     TR[0] = P[0]
+     TR[i] = TR[i-1] * (P[i] + D[i]) / P[i-1]
+
+   the standard reinvested-distribution series. Returns a new closes array of
+   the same length; raw prices are left untouched for display. */
+function applyDividends(dates, closes, divs) {
+  if (!divs || !divs.length || !closes.length) return closes.slice();
+
+  /* Credit each dividend to the first trading day on or after its ex-date.
+     Matching dates exactly would silently drop any dividend whose ex-date
+     lands on a holiday or weekend — which understates total return. */
+  const ds = divs.slice().sort((a, b) => a.date < b.date ? -1 : 1);
+  const perDay = new Array(closes.length).fill(0);
+  let di = 0;
+  for (let i = 0; i < dates.length && di < ds.length; i++) {
+    while (di < ds.length && ds[di].date <= dates[i]) { perDay[i] += ds[di].amount; di++; }
+  }
+
+  const out = new Array(closes.length);
+  out[0] = closes[0];
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    out[i] = prev > 0 ? out[i - 1] * ((closes[i] + perDay[i]) / prev) : out[i - 1];
+  }
+  return out;
 }
 
 /* Restrict aligned data to the last N years (0 = keep all). */
@@ -62,7 +104,13 @@ function sliceYears(aligned, years) {
   const dates = aligned.dates.slice(i);
   const closes = {};
   Object.keys(aligned.closes).forEach(s => { closes[s] = aligned.closes[s].slice(i); });
-  return { dates, closes };
+  const out = { dates, closes };
+  // carry the raw (unadjusted) prices along when total-return mode built them
+  if (aligned.raw) {
+    out.raw = {};
+    Object.keys(aligned.raw).forEach(s => { out.raw[s] = aligned.raw[s].slice(i); });
+  }
+  return out;
 }
 
 /* ------------------------- backtest a portfolio ------------------------- */
