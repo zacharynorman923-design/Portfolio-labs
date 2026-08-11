@@ -127,9 +127,12 @@ so those groups are projected as slabs (`lo ≤ a·w ≤ hi`) while plain bucket
 the faster disjoint path.
 
 Every fit reports **R²** — how much of the fund's movement the style mix
-actually explains. Anything under 60% is greyed out, called out by name, and
-excluded from the constraint mapping, because a low-R² fit is a bad description
-of the fund rather than a subtle one. Commodities and inflation-linked bonds
+actually explains. Anything under 60% is excluded from the constraint mapping,
+because a low-R² fit is a bad description of the fund rather than a subtle one.
+Instead of showing a mix nobody should act on, those rows offer the category
+directly: **"Poor fit — file it as…"** with a dropdown. The fit is the thing
+that failed, and you know what the fund is. Your choice drives the taxonomy and
+the constraint mapping whether or not the estimated mix is switched on. Commodities and inflation-linked bonds
 routinely land there: nothing in the basis behaves like them. This is an
 estimate of behaviour, not a holdings lookup — it needs ~30 months of overlap
 and the answer moves with the window, so manual reassignment always wins.

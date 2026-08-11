@@ -358,3 +358,12 @@ a:hover{text-decoration:underline}
   .ab-copy{margin-left:0}
 }
 .sb-cap{display:inline-block;margin-top:3px;font-size:11.5px;color:var(--muted);opacity:.85}
+.sm-pick{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sm-pick label{font-size:11.5px;color:var(--muted)}
+.sm-pick select{background:var(--panel);border:1.5px solid var(--gold);border-radius:8px;padding:5px 7px;
+  color:var(--ink);font-size:12px;cursor:pointer;max-width:210px}
+.sm-pick select:focus{outline:none;border-color:var(--accent)}
+.sm-row.weak{opacity:1}
+.sm-row.weak .sm-part{opacity:.55}
+.sm-row.picked .sm-pick select{border-color:var(--up)}
+.sm-row.picked .sm-pick label{color:var(--up)}

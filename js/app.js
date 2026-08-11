@@ -807,12 +807,31 @@ async function detectStyles() {
 }
 
 function renderStyles(run) {
+  const catOptions = Object.keys(SUBCLASSES)
+    .map(k => `<option value="${k}">${esc(SUBCLASSES[k].name)}</option>`).join('');
+
   const rows = run.syms.filter(s => STYLES[s]).map(s => {
     const st = STYLES[s];
     const weak = st.r2 < STYLE_R2_OK;
+    const chosen = !!SUBCLASS_OVERRIDE[s];
+
+    /* A weak fit is a bad description of the fund, so rather than show a mix
+       nobody should act on, offer the category outright — the fit itself is
+       the thing that failed, and a person knows what the fund is. */
+    if (weak) {
+      return `<div class="sm-row weak${chosen ? ' picked' : ''}">
+        <span class="sm-sym">${esc(s)}</span>
+        <span class="sm-mix sm-pick">
+          <label for="pick-${esc(s)}">${chosen ? 'Filed as' : 'Poor fit — file it as'}</label>
+          <select id="pick-${esc(s)}" data-pick="${esc(s)}">${catOptions}</select>
+        </span>
+        <span class="sm-r2" title="How much of this fund's movement the style mix explains">R² ${st.r2.toFixed(2)}</span>
+      </div>`;
+    }
+
     const parts = Object.keys(st.mix).sort((a, b) => st.mix[b] - st.mix[a]).slice(0, 4)
       .map(k => `<span class="sm-part">${esc(subclassName(k))} <b>${FMT.pct(st.mix[k], 0)}</b></span>`).join('');
-    return `<div class="sm-row${weak ? ' weak' : ''}">
+    return `<div class="sm-row">
       <span class="sm-sym">${esc(s)}</span>
       <span class="sm-mix">${parts}</span>
       <span class="sm-r2" title="How much of this fund's movement the style mix explains">R² ${st.r2.toFixed(2)}</span>
@@ -820,17 +839,23 @@ function renderStyles(run) {
   }).join('');
 
   const weakOnes = run.syms.filter(s => STYLES[s] && STYLES[s].r2 < STYLE_R2_OK);
+  const unset = weakOnes.filter(s => !SUBCLASS_OVERRIDE[s]);
   const note = weakOnes.length
-    ? `<div class="cn-status bad">Low R² for ${weakOnes.map(esc).join(', ')} — the style benchmarks
-       explain little of what ${weakOnes.length > 1 ? 'these funds' : 'this fund'} actually did, so
-       ${weakOnes.length > 1 ? 'those mixes' : 'that mix'} shouldn't be leaned on. Commodities and
-       inflation-linked bonds often land here because nothing in the basis behaves like them.</div>`
+    ? `<div class="cn-status${unset.length ? ' bad' : ''}">The style benchmarks explain little of what
+       ${weakOnes.map(esc).join(', ')} actually did, so ${weakOnes.length > 1 ? 'their mixes are' : 'that mix is'}
+       not used — pick the category above instead. Commodities, gold and inflation-linked bonds usually
+       land here because nothing in the basis behaves like them.</div>`
     : '';
   const months = run.syms.map(s => STYLES[s] && STYLES[s].months).find(Boolean);
   $('styleOut').innerHTML =
     `<div class="cn-hint">Estimated from ${months || '—'} months of returns. R² shows how much of each
       fund's movement the mix explains — treat anything under ${Math.round(STYLE_R2_OK * 100)}% as unreliable.</div>`
     + rows + note;
+
+  // reflect the current category on each manual picker
+  $('styleOut').querySelectorAll('[data-pick]').forEach(sel => {
+    sel.value = subclassOf(sel.dataset.pick);
+  });
 }
 
 /* Fractional class/subcategory membership derived from the fitted mixes.
@@ -1179,6 +1204,24 @@ function bindEvents() {
   });
 
   $('styleBtn').addEventListener('click', detectStyles);
+
+  /* Choosing a category for a poorly-fitted fund. It feeds the same override
+     the constraint mapping already falls back to, so the choice applies
+     whether or not the estimated mix is switched on. */
+  $('styleOut').addEventListener('change', e => {
+    const sel = e.target.closest('[data-pick]');
+    if (!sel) return;
+    SUBCLASS_OVERRIDE[sel.dataset.pick] = sel.value;
+    persistConstraints();
+    renderHoldings();
+    if (state.last) {
+      const run = state.last.runs[focusKey()];
+      renderStyles(run);
+      delete $('cnRows').dataset.sig;      // categories may have changed
+      renderDonuts(state.last);
+      renderOptimizer(currentObjective());
+    }
+  });
   $('styleUse').addEventListener('change', e => {
     styleUseMix = e.target.checked;
     delete $('cnRows').dataset.sig;      // categories change, so rebuild the rows
