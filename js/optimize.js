@@ -104,6 +104,33 @@ function projectBoundedSimplex(x, lo, hi) {
   return projectSimplex(x.map(v => v / scaleTo)).map(v => v * scaleTo);
 }
 
+/* Exact projection onto the slab { x : lo <= a·x <= hi }.
+   Used when membership is fractional — a fund that style analysis says is 60%
+   equity contributes 0.6 of its weight to the equity constraint, so the group
+   is a general linear form rather than a plain subset sum. */
+function projectSlab(x, a, lo, hi) {
+  let s = 0, norm = 0;
+  for (let i = 0; i < x.length; i++) { s += a[i] * x[i]; norm += a[i] * a[i]; }
+  if (norm < 1e-18) return x.slice();
+  if (s >= lo - 1e-12 && s <= hi + 1e-12) return x.slice();
+  const target = s < lo ? lo : hi;
+  const k = (target - s) / norm;
+  return x.map((v, i) => v + k * a[i]);
+}
+
+/* Membership vector for a group: 1 for a hard bucket, a fraction when style
+   analysis has apportioned the holding across several categories. */
+function groupVector(g, n) {
+  if (g.wts) return g.wts;
+  const a = new Array(n).fill(0);
+  g.idx.forEach(i => { a[i] = 1; });
+  return a;
+}
+function groupSum(w, g) {
+  if (g.wts) { let s = 0; for (let i = 0; i < w.length; i++) s += g.wts[i] * w[i]; return s; }
+  return g.idx.reduce((a, i) => a + w[i], 0);
+}
+
 /* Projection onto the group-box set (separable across disjoint groups). */
 function projectGroups(w, groups) {
   const out = w.slice();
@@ -137,7 +164,7 @@ function feasibilityError(x, groups) {
   let err = Math.abs(x.reduce((a, b) => a + b, 0) - 1);
   for (let i = 0; i < x.length; i++) if (x[i] < 0) err -= x[i];
   (groups || []).forEach(g => {
-    const s = g.idx.reduce((a, i) => a + x[i], 0);
+    const s = groupSum(x, g);
     if (s < g.lo) err += g.lo - s;
     if (s > g.hi) err += s - g.hi;
   });
@@ -151,10 +178,24 @@ function projectFeasible(w, groups, tol, maxIter) {
   if (feasibilityError(w, groups) < TOL) return w.slice();
 
   const n = w.length;
-  const byLevel = {};
-  groups.forEach(g => { (byLevel[g.level || 'cat'] = byLevel[g.level || 'cat'] || []).push(g); });
+  const hard = groups.filter(g => !g.wts);
+  const frac = groups.filter(g => g.wts);
 
+  /* Hard buckets stay on the fast path: groups are disjoint within a level, so
+     one separable projection handles the whole level exactly. Fractional
+     groups overlap arbitrarily, so each becomes its own slab, with
+     non-negativity as a separate set since the slabs no longer enforce it. */
+  const byLevel = {};
+  hard.forEach(g => { (byLevel[g.level || 'cat'] = byLevel[g.level || 'cat'] || []).push(g); });
   const sets = Object.keys(byLevel).map(lvl => (x => projectGroups(x, byLevel[lvl])));
+
+  if (frac.length) {
+    frac.forEach(g => {
+      const a = groupVector(g, n);
+      sets.push(x => projectSlab(x, a, g.lo, g.hi));
+    });
+    sets.push(x => x.map(v => Math.max(0, v)));
+  }
   sets.push(projectSumOne);
 
   const m = sets.length;
@@ -472,7 +513,7 @@ function groupViolations(w, groups) {
   if (!groups || !groups.length) return [];
   const out = [];
   groups.forEach(g => {
-    const s = g.idx.reduce((a, i) => a + w[i], 0);
+    const s = groupSum(w, g);
     if (s < g.lo - 5e-4 || s > g.hi + 5e-4) {
       out.push({ name: g.name, actual: s, lo: g.lo, hi: g.hi });
     }
@@ -498,6 +539,27 @@ function frontierRange(mu, cov, groups) {
    category key to {lo, hi} as fractions. Categories with no holdings are
    dropped, but a positive minimum on an empty category is reported by
    constraintsFeasible() rather than silently ignored. */
+/* Groups from fractional membership. `member[cat][i]` is how much of holding i
+   counts toward that category (0–1), as produced by style analysis. */
+function buildFractionalGroups(member, bounds, names, level, n) {
+  const groups = [];
+  Object.keys(bounds || {}).forEach(cat => {
+    const b = bounds[cat];
+    if (!b) return;
+    const lo = Math.max(0, Math.min(1, b.lo == null ? 0 : b.lo));
+    const hi = Math.max(0, Math.min(1, b.hi == null ? 1 : b.hi));
+    if (lo <= 0 && hi >= 1) return;                     // unconstrained
+    const wts = member[cat] || new Array(n).fill(0);
+    groups.push({
+      wts, idx: wts.map((v, i) => v > 0 ? i : -1).filter(i => i >= 0),
+      lo, hi, level: level || 'cat',
+      name: (names && names[cat]) || cat, key: cat,
+      parent: (level === 'sub' && SUBCLASSES[cat]) ? SUBCLASSES[cat].cls : null,
+    });
+  });
+  return groups;
+}
+
 function buildGroups(assign, bounds, names, level) {
   const byCat = {};
   assign.forEach((cat, i) => { (byCat[cat] = byCat[cat] || []).push(i); });

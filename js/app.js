@@ -516,10 +516,18 @@ const constraintState = { on: false, bounds: {} };
 /* Which categories are actually represented in the portfolio on screen. */
 function activeCategories(syms) {
   const classes = [], subs = [];
+  const add = (c, sc) => {
+    if (c && !classes.includes(c)) classes.push(c);
+    if (sc && !subs.includes(sc)) subs.push(sc);
+  };
   syms.forEach(s => {
-    const c = classOf(s), sc = subclassOf(s);
-    if (!classes.includes(c)) classes.push(c);
-    if (!subs.includes(sc)) subs.push(sc);
+    const st = STYLES[s];
+    // a style mix can put a holding into categories its hard bucket never had
+    if (styleUseMix && st && st.r2 >= STYLE_R2_OK) {
+      Object.keys(st.mix).forEach(k => add(SUBCLASSES[k] && SUBCLASSES[k].cls, k));
+    } else {
+      add(classOf(s), subclassOf(s));
+    }
   });
   const order = Object.keys(CLASSES);
   classes.sort((a, b) => order.indexOf(a) - order.indexOf(b));
@@ -534,8 +542,16 @@ function categoryWeights(holds) {
   const byClass = {}, bySub = {};
   holds.forEach(h => {
     const w = (+h.weight) / total;
-    byClass[classOf(h.sym)] = (byClass[classOf(h.sym)] || 0) + w;
-    bySub[subclassOf(h.sym)] = (bySub[subclassOf(h.sym)] || 0) + w;
+    const st = STYLES[h.sym];
+    // when a usable style fit is in play, spread the holding across categories
+    if (styleUseMix && st && st.r2 >= STYLE_R2_OK) {
+      const cm = classMixOf(st.mix);
+      Object.keys(cm).forEach(c => byClass[c] = (byClass[c] || 0) + w * cm[c]);
+      Object.keys(st.mix).forEach(k => bySub[k] = (bySub[k] || 0) + w * st.mix[k]);
+    } else {
+      byClass[classOf(h.sym)] = (byClass[classOf(h.sym)] || 0) + w;
+      bySub[subclassOf(h.sym)] = (bySub[subclassOf(h.sym)] || 0) + w;
+    }
   });
   return { byClass, bySub, total };
 }
@@ -603,6 +619,80 @@ function renderConstraints(run) {
   $('cnEnable').checked = constraintState.on;
 }
 
+/* --------------------------- style analysis ----------------------------- */
+/* STYLES[sym] = { mix, r2, months } once "Detect style" has run. */
+const STYLES = {};
+let styleUseMix = false;
+const STYLE_R2_OK = 0.60;      // below this the fit explains too little to lean on
+
+async function detectStyles() {
+  if (!state.last) return;
+  const run = state.last.runs[focusKey()];
+  const btn = $('styleBtn'), out = $('styleOut');
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Estimating…';
+  out.innerHTML = '<div class="cn-hint">Fitting each holding against the style benchmarks…</div>';
+  try {
+    const res = await analyzeStyles(run.syms, (s) => fetchDaily(s, false));
+    if (res.error) throw new Error(res.error);
+    Object.keys(res.styles).forEach(s => { STYLES[s] = res.styles[s]; });
+    renderStyles(run);
+    $('styleUseWrap').hidden = false;
+  } catch (err) {
+    out.innerHTML = '<div class="cn-status bad">' + esc(err.message || 'Could not estimate style.') + '</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+function renderStyles(run) {
+  const rows = run.syms.filter(s => STYLES[s]).map(s => {
+    const st = STYLES[s];
+    const weak = st.r2 < STYLE_R2_OK;
+    const parts = Object.keys(st.mix).sort((a, b) => st.mix[b] - st.mix[a]).slice(0, 4)
+      .map(k => `<span class="sm-part">${esc(subclassName(k))} <b>${FMT.pct(st.mix[k], 0)}</b></span>`).join('');
+    return `<div class="sm-row${weak ? ' weak' : ''}">
+      <span class="sm-sym">${esc(s)}</span>
+      <span class="sm-mix">${parts}</span>
+      <span class="sm-r2" title="How much of this fund's movement the style mix explains">R² ${st.r2.toFixed(2)}</span>
+    </div>`;
+  }).join('');
+
+  const weakOnes = run.syms.filter(s => STYLES[s] && STYLES[s].r2 < STYLE_R2_OK);
+  const note = weakOnes.length
+    ? `<div class="cn-status bad">Low R² for ${weakOnes.map(esc).join(', ')} — the style benchmarks
+       explain little of what ${weakOnes.length > 1 ? 'these funds' : 'this fund'} actually did, so
+       ${weakOnes.length > 1 ? 'those mixes' : 'that mix'} shouldn't be leaned on. Commodities and
+       inflation-linked bonds often land here because nothing in the basis behaves like them.</div>`
+    : '';
+  const months = run.syms.map(s => STYLES[s] && STYLES[s].months).find(Boolean);
+  $('styleOut').innerHTML =
+    `<div class="cn-hint">Estimated from ${months || '—'} months of returns. R² shows how much of each
+      fund's movement the mix explains — treat anything under ${Math.round(STYLE_R2_OK * 100)}% as unreliable.</div>`
+    + rows + note;
+}
+
+/* Fractional class/subcategory membership derived from the fitted mixes.
+   Holdings without a usable fit fall back to their hard category. */
+function styleMembership(syms, level) {
+  const member = {};
+  const put = (cat, i, v) => {
+    if (!member[cat]) member[cat] = new Array(syms.length).fill(0);
+    member[cat][i] += v;
+  };
+  syms.forEach((s, i) => {
+    const st = STYLES[s];
+    if (st && st.r2 >= STYLE_R2_OK) {
+      const mix = level === 'class' ? classMixOf(st.mix) : st.mix;
+      Object.keys(mix).forEach(k => put(k, i, mix[k]));
+    } else {
+      put(level === 'class' ? classOf(s) : subclassOf(s), i, 1);
+    }
+  });
+  return member;
+}
+
 /* Turn the UI state into solver groups for the holdings in `run`. */
 function buildConstraintGroups(run) {
   if (!constraintState.on) return [];
@@ -619,6 +709,13 @@ function buildConstraintGroups(run) {
     if (CLASSES[k]) clsBounds[k] = entry; else if (SUBCLASSES[k]) subBounds[k] = entry;
   });
 
+  /* With style analysis applied, a holding contributes fractionally to several
+     categories at once; otherwise it sits wholly in one. */
+  const anyFit = syms.some(s => STYLES[s] && STYLES[s].r2 >= STYLE_R2_OK);
+  if (styleUseMix && anyFit) {
+    return buildFractionalGroups(styleMembership(syms, 'class'), clsBounds, clsNames, 'class', syms.length)
+      .concat(buildFractionalGroups(styleMembership(syms, 'sub'), subBounds, subNames, 'sub', syms.length));
+  }
   return buildGroups(syms.map(s => classOf(s)), clsBounds, clsNames, 'class')
     .concat(buildGroups(syms.map(s => subclassOf(s)), subBounds, subNames, 'sub'));
 }
@@ -913,6 +1010,13 @@ function bindEvents() {
   $('cnEnable').addEventListener('change', e => {
     constraintState.on = e.target.checked;
     persistConstraints();
+    if (state.last) renderOptimizer(currentObjective());
+  });
+
+  $('styleBtn').addEventListener('click', detectStyles);
+  $('styleUse').addEventListener('change', e => {
+    styleUseMix = e.target.checked;
+    delete $('cnRows').dataset.sig;      // categories change, so rebuild the rows
     if (state.last) renderOptimizer(currentObjective());
   });
 

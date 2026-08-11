@@ -96,6 +96,34 @@ Large Cap Blend, the short/long fixed income splits, real estate and crypto sit
 alongside the core categories because filing SPY under "large cap growth" or TLT
 under "intermediate" would be wrong.
 
+##### Detecting style from returns
+
+Morningstar's style box is licensed data with no free API, so rather than look a
+fund's box weights up, **Detect style from returns** infers an equivalent mix
+using returns-based style analysis (Sharpe, 1992). Each holding's monthly
+returns are regressed against a basket of style benchmarks with the weights
+constrained to be non-negative and sum to 1:
+
+```
+minimise ‖ r_fund − Σ wₖ · r_benchmarkₖ ‖²    subject to  w ≥ 0, Σw = 1
+```
+
+The fitted weights are the fund's *effective* exposure. Ticking **use the
+estimated mix for limits** then makes category membership fractional: a balanced
+fund counts partly toward Equity and partly toward Fixed Income instead of being
+forced into one bucket, which is what makes class limits meaningful for blended
+funds. Fractional membership turns each limit into a general linear constraint,
+so those groups are projected as slabs (`lo ≤ a·w ≤ hi`) while plain buckets keep
+the faster disjoint path.
+
+Every fit reports **R²** — how much of the fund's movement the style mix
+actually explains. Anything under 60% is greyed out, called out by name, and
+excluded from the constraint mapping, because a low-R² fit is a bad description
+of the fund rather than a subtle one. Commodities and inflation-linked bonds
+routinely land there: nothing in the basis behaves like them. This is an
+estimate of behaviour, not a holdings lookup — it needs ~30 months of overlap
+and the answer moves with the window, so manual reassignment always wins.
+
 Constraints are enforced by projecting every optimizer iterate onto the feasible
 set
 
@@ -183,6 +211,7 @@ Cloudflare Pages) with no build command and `/` as the publish directory.
 | `js/data.js` | Ticker universe, real lazy-portfolio allocations, formatting, offline demo series |
 | `js/providers.js` | Live-data adapters (Twelve Data, Alpha Vantage) — daily history + quotes |
 | `js/stats.js` | The engine: backtest, metrics, correlations, VaR/CVaR, Monte Carlo |
+| `js/style.js` | Returns-based style analysis: constrained least squares fit against style benchmarks |
 | `js/optimize.js` | Optimization: covariance, efficient frontier, max Sharpe, min variance, risk parity |
 | `js/charts.js` | Inline-SVG charts (growth, drawdown, donut, heatmap, fan, bars) |
 | `js/app.js` | State, data fetching, rendering, interactions, persistence |

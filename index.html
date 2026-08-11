@@ -211,7 +211,15 @@
         <div id="cnRows"></div>
         <div class="cn-assign-wrap">
           <div class="cn-sub-head">Categories</div>
-          <div class="cn-hint">Each holding is classified automatically. Change any that you'd file differently.</div>
+          <div class="cn-hint">Each holding sits in one category by default. Change any you'd file
+            differently — or estimate each fund's real mix from its returns.</div>
+          <div class="style-row">
+            <button class="chip-btn" id="styleBtn">Detect style from returns</button>
+            <label class="mini-toggle" id="styleUseWrap" hidden>
+              <input type="checkbox" id="styleUse"> use the estimated mix for limits
+            </label>
+          </div>
+          <div id="styleOut" class="style-out"></div>
           <div id="cnAssign" class="cn-assign"></div>
         </div>
         <div id="cnStatus" class="cn-status" role="status" aria-live="polite"></div>
@@ -277,6 +285,7 @@
 <script src="js/providers.js"></script>
 <script src="js/stats.js"></script>
 <script src="js/optimize.js"></script>
+<script src="js/style.js"></script>
 <script src="js/charts.js"></script>
 <script src="js/app.js"></script>
 <script>

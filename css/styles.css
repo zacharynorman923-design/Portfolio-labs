@@ -248,6 +248,18 @@ a:hover{text-decoration:underline}
 .cn-a select{background:var(--panel);border:1.5px solid var(--line-2);border-radius:8px;padding:6px 7px;
   color:var(--ink);font-size:12px;width:100%;cursor:pointer}
 .cn-a select:focus{outline:none;border-color:var(--gold)}
+.style-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.style-row .chip-btn{font-size:12.5px;padding:7px 12px}
+.style-out{margin-bottom:12px}
+.sm-row{display:grid;grid-template-columns:58px 1fr 62px;gap:9px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.sm-row.weak{opacity:.6}
+.sm-sym{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700}
+.sm-mix{display:flex;flex-wrap:wrap;gap:4px 10px}
+.sm-part{font-size:11.5px;color:var(--muted)}
+.sm-part b{color:var(--ink-soft);font-family:'JetBrains Mono',monospace;font-size:11px}
+.sm-r2{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.sm-row.weak .sm-r2{color:var(--down)}
+
 .cn-status{margin-top:12px;font-size:12.5px;color:var(--muted);line-height:1.6}
 .cn-status.bad{color:var(--down)}
 .cn-status.bad b{color:var(--down)}
