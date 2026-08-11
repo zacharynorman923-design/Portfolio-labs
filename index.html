@@ -201,6 +201,22 @@
         <button class="chip-btn" data-obj="equal">Equal weight</button>
       </div>
 
+      <details class="constraints" id="constraints">
+        <summary>Asset allocation constraints <span class="cn-count" id="cnCount"></span></summary>
+        <label class="opt-row cn-enable">
+          <input type="checkbox" id="cnEnable">
+          <span><b>Apply these limits</b> to every optimization below. Minimums and
+          maximums are shares of the whole portfolio; leave a row blank to leave it free.</span>
+        </label>
+        <div id="cnRows"></div>
+        <div class="cn-assign-wrap">
+          <div class="cn-sub-head">Categories</div>
+          <div class="cn-hint">Each holding is classified automatically. Change any that you'd file differently.</div>
+          <div id="cnAssign" class="cn-assign"></div>
+        </div>
+        <div id="cnStatus" class="cn-status" role="status" aria-live="polite"></div>
+      </details>
+
       <div class="opt-targets">
         <div class="tgt">
           <label class="tgt-lab" for="tgtVol">Most return I can get at a volatility of</label>

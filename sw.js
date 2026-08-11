@@ -1,6 +1,6 @@
 /* Portfolio Labs service worker — offline app shell + font caching.
    Bump VERSION on every release so clients discard the old cached shell. */
-const VERSION = 'plabs-v4';
+const VERSION = 'plabs-v5';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 

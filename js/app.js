@@ -58,6 +58,7 @@ function init() {
   if (!state.portfolios.A.length) state.portfolios.A = [{ sym: 'VTI', weight: 60 }, { sym: 'BND', weight: 40 }];
   if (!state.portfolios.B.length) state.portfolios.B = [{ sym: 'VTI', weight: 100 }];
 
+  loadConstraints();
   $('compareToggle').checked = state.compare;
   syncCompareUI();
   renderSuggest();
@@ -463,12 +464,27 @@ function renderDonuts(R) {
     const t = run.holds.reduce((s, h) => s + (+h.weight), 0) || 1;
     return run.holds.map((h, i) => ({ label: h.sym, value: +h.weight / t, color: SLICE_COLORS[i % SLICE_COLORS.length] }));
   };
+  /* A compact class breakdown under the donut — equity / fixed / alts is the
+     first thing most people check about an allocation. */
+  const breakdown = (run) => {
+    const cw = categoryWeights(run.holds);
+    const rows = Object.keys(CLASSES)
+      .filter(c => cw.byClass[c] > 0)
+      .map(c => `<div class="cb-row">
+        <span class="cb-bar"><i style="width:${(cw.byClass[c] * 100).toFixed(1)}%;background:${CLASSES[c].color}"></i></span>
+        <span class="cb-name">${esc(CLASSES[c].name)}</span>
+        <span class="cb-val">${FMT.pct(cw.byClass[c], 1)}</span></div>`).join('');
+    return `<div class="class-break">${rows}</div>`;
+  };
+
   const two = R.keys.length > 1;
   donut($('donut'), build(R.runs.A));
+  $('donut').insertAdjacentHTML('beforeend', breakdown(R.runs.A));
   if (two) {
     $('donut').insertAdjacentHTML('afterbegin', '<div class="donut-label">Portfolio A</div>');
     $('donutB').classList.remove('hidden');
     donut($('donutB'), build(R.runs.B));
+    $('donutB').insertAdjacentHTML('beforeend', breakdown(R.runs.B));
     $('donutB').insertAdjacentHTML('afterbegin', '<div class="donut-label">Portfolio B</div>');
   } else {
     $('donutB').classList.add('hidden');
@@ -490,6 +506,138 @@ function renderCorr(R) {
   $('corrTag').textContent = R.keys.length > 1
     ? 'portfolio ' + which + ' · monthly returns' : 'monthly returns';
   heatmap($('corrChart'), correlationMatrix(R.aligned, run.syms), run.syms);
+}
+
+/* --------------------- asset allocation constraints --------------------- */
+/* bounds[categoryKey] = { lo, hi } as fractions; blank inputs stay undefined
+   so an untouched row means "no limit" rather than 0–100. */
+const constraintState = { on: false, bounds: {} };
+
+/* Which categories are actually represented in the portfolio on screen. */
+function activeCategories(syms) {
+  const classes = [], subs = [];
+  syms.forEach(s => {
+    const c = classOf(s), sc = subclassOf(s);
+    if (!classes.includes(c)) classes.push(c);
+    if (!subs.includes(sc)) subs.push(sc);
+  });
+  const order = Object.keys(CLASSES);
+  classes.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const subOrder = Object.keys(SUBCLASSES);
+  subs.sort((a, b) => subOrder.indexOf(a) - subOrder.indexOf(b));
+  return { classes, subs };
+}
+
+/* Current share of the portfolio sitting in each category. */
+function categoryWeights(holds) {
+  const total = holds.reduce((s, h) => s + (+h.weight), 0) || 1;
+  const byClass = {}, bySub = {};
+  holds.forEach(h => {
+    const w = (+h.weight) / total;
+    byClass[classOf(h.sym)] = (byClass[classOf(h.sym)] || 0) + w;
+    bySub[subclassOf(h.sym)] = (bySub[subclassOf(h.sym)] || 0) + w;
+  });
+  return { byClass, bySub, total };
+}
+
+function renderConstraints(run) {
+  const syms = run.syms;
+  const { classes, subs } = activeCategories(syms);
+  const cw = categoryWeights(run.holds);
+
+  const row = (key, name, level, current, indent) => {
+    const b = constraintState.bounds[key] || {};
+    return `<div class="cn-row${indent ? ' sub' : ''}">
+      <span class="cn-name">${esc(name)}</span>
+      <span class="cn-cur">${FMT.pct(current || 0, 1)}</span>
+      <span class="cn-in">
+        <input type="number" min="0" max="100" step="1" placeholder="—"
+               data-cn="${key}" data-side="lo" value="${b.lo != null ? +(b.lo * 100).toFixed(1) : ''}"
+               aria-label="${esc(name)} minimum %">
+        <em>to</em>
+        <input type="number" min="0" max="100" step="1" placeholder="—"
+               data-cn="${key}" data-side="hi" value="${b.hi != null ? +(b.hi * 100).toFixed(1) : ''}"
+               aria-label="${esc(name)} maximum %">
+        <span class="cn-pct">%</span>
+      </span>
+    </div>`;
+  };
+
+  /* Rebuild the rows only when the set of categories actually changes —
+     otherwise a re-solve mid-edit would replace the input under the cursor. */
+  const sig = classes.join(',') + '|' + subs.join(',');
+  if ($('cnRows').dataset.sig !== sig) {
+    let html = `<div class="cn-head"><span>Category</span><span>Now</span><span>Min / Max</span></div>`;
+    classes.forEach(c => {
+      html += row(c, className(c), 'class', cw.byClass[c]);
+      subs.filter(s => SUBCLASSES[s].cls === c)
+          .forEach(s => { html += row(s, subclassName(s), 'sub', cw.bySub[s], true); });
+    });
+    $('cnRows').innerHTML = html;
+    $('cnRows').dataset.sig = sig;
+  } else {
+    // same categories: just refresh the "now" column in place
+    const cur = {}; classes.forEach(c => cur[c] = cw.byClass[c]); subs.forEach(s => cur[s] = cw.bySub[s]);
+    $('cnRows').querySelectorAll('.cn-row').forEach(r => {
+      const key = r.querySelector('[data-cn]');
+      if (key) r.querySelector('.cn-cur').textContent = FMT.pct(cur[key.dataset.cn] || 0, 1);
+    });
+  }
+
+  // per-holding category assignment
+  const opts = Object.keys(SUBCLASSES).map(k =>
+    `<option value="${k}">${esc(SUBCLASSES[k].name)}</option>`).join('');
+  $('cnAssign').innerHTML = syms.map(s =>
+    `<label class="cn-a"><span>${esc(s)}</span>
+       <select data-assign="${esc(s)}">${opts}</select></label>`).join('');
+  syms.forEach(s => {
+    const sel = $('cnAssign').querySelector(`[data-assign="${CSS.escape(s)}"]`);
+    if (sel) sel.value = subclassOf(s);
+  });
+
+  const n = Object.keys(constraintState.bounds).filter(k => {
+    const b = constraintState.bounds[k];
+    return b && (b.lo != null || b.hi != null);
+  }).length;
+  $('cnCount').textContent = constraintState.on && n ? n + ' active' : (n ? n + ' set · off' : '');
+  $('cnEnable').checked = constraintState.on;
+}
+
+/* Turn the UI state into solver groups for the holdings in `run`. */
+function buildConstraintGroups(run) {
+  if (!constraintState.on) return [];
+  const syms = run.syms;
+  const clsBounds = {}, subBounds = {};
+  const clsNames = {}, subNames = {};
+  Object.keys(CLASSES).forEach(k => clsNames[k] = CLASSES[k].name);
+  Object.keys(SUBCLASSES).forEach(k => subNames[k] = SUBCLASSES[k].name);
+
+  Object.keys(constraintState.bounds).forEach(k => {
+    const b = constraintState.bounds[k];
+    if (!b || (b.lo == null && b.hi == null)) return;
+    const entry = { lo: b.lo == null ? 0 : b.lo, hi: b.hi == null ? 1 : b.hi };
+    if (CLASSES[k]) clsBounds[k] = entry; else if (SUBCLASSES[k]) subBounds[k] = entry;
+  });
+
+  return buildGroups(syms.map(s => classOf(s)), clsBounds, clsNames, 'class')
+    .concat(buildGroups(syms.map(s => subclassOf(s)), subBounds, subNames, 'sub'));
+}
+
+function persistConstraints() {
+  try {
+    localStorage.setItem('plabs_constraints_v1', JSON.stringify({
+      on: constraintState.on, bounds: constraintState.bounds, overrides: SUBCLASS_OVERRIDE,
+    }));
+  } catch (e) {}
+}
+function loadConstraints() {
+  try {
+    const s = JSON.parse(localStorage.getItem('plabs_constraints_v1') || 'null');
+    if (!s) return;
+    constraintState.on = !!s.on;
+    constraintState.bounds = s.bounds || {};
+    Object.keys(s.overrides || {}).forEach(k => { SUBCLASS_OVERRIDE[k] = s.overrides[k]; });
+  } catch (e) {}
 }
 
 /* ----------------------------- optimizer -------------------------------- */
@@ -523,9 +671,23 @@ function renderOptimizer(objective) {
 
   const cur = evaluateWeights(stats, run.holds.map(h => +h.weight), R.rf);
 
+  renderConstraints(run);
+  const groups = buildConstraintGroups(run);
+  const feas = constraintsFeasible(groups, run.syms.length);
+  if (!feas.ok) {
+    $('cnStatus').innerHTML = '<b>These limits can’t all be met.</b> ' + esc(feas.reason);
+    $('cnStatus').className = 'cn-status bad';
+    $('constraints').open = true;
+  } else {
+    $('cnStatus').textContent = constraintState.on && groups.length
+      ? 'Limits applied to every optimization below.' : '';
+    $('cnStatus').className = 'cn-status';
+  }
+  const active = feas.ok ? groups : [];   // never solve against impossible bounds
+
   /* Show what's actually reachable, and seed the target boxes from the
      current mix so the first solve is anchored to something meaningful. */
-  const range = frontierRange(stats.mu, stats.cov);
+  const range = frontierRange(stats.mu, stats.cov, active);
   $('volRange').textContent = 'reachable ' + FMT.pct(range.minVol, 1) + ' – ' + FMT.pct(range.maxVol, 1);
   $('retRange').textContent = 'reachable ' + FMT.pct(range.minRet, 1) + ' – ' + FMT.pct(range.maxRet, 1);
   if (!objective) {
@@ -537,10 +699,10 @@ function renderOptimizer(objective) {
   if (objective === 'targetvol') target = clampNum($('tgtVol').value, 0, 100, cur.vol * 100) / 100;
   if (objective === 'targetret') target = clampNum($('tgtRet').value, -100, 1000, cur.ret * 100) / 100;
 
-  const opt = objective ? optimizePortfolio(stats, objective, R.rf, target) : null;
+  const opt = objective ? optimizePortfolio(stats, objective, R.rf, target, active) : null;
 
   // frontier + markers
-  const frontier = efficientFrontier(stats.mu, stats.cov, 40);
+  const frontier = efficientFrontier(stats.mu, stats.cov, active.length ? 26 : 40, active);
   const assetDots = run.syms.map((s, i) => ({
     label: s, vol: Math.sqrt(stats.cov[i][i]), ret: stats.mu[i],
   }));
@@ -574,11 +736,17 @@ function renderOptimizer(objective) {
      plainly and show what was solved instead — never present a clamped answer
      as though it met the request. */
   let infeasible = '';
+  if (opt.violations && opt.violations.length) {
+    infeasible += `<div class="opt-warn"><b>Couldn’t meet ${opt.violations.length === 1 ? 'one limit' : 'some limits'}.</b> `
+      + opt.violations.map(v => esc(v.name) + ' came out at ' + FMT.pct(v.actual, 1)
+        + ' (limit ' + FMT.pct(v.lo, 0) + '–' + FMT.pct(v.hi, 0) + ')').join('; ')
+      + '. Usually that means there are no holdings in that category — add one, or relax the limit.</div>';
+  }
   if (opt.target && !opt.target.feasible) {
     const isVol = objective === 'targetvol';
     const unit = isVol ? 'volatility' : 'return';
     const reachable = FMT.pct(opt.target.min, 1) + ' – ' + FMT.pct(opt.target.max, 1);
-    infeasible = `<div class="opt-warn"><b>${FMT.pct(target, 1)} ${unit} isn’t reachable</b>
+    infeasible += `<div class="opt-warn"><b>${FMT.pct(target, 1)} ${unit} isn’t reachable</b>
       with these holdings — the frontier spans ${reachable}.
       Showing the closest achievable portfolio (${FMT.pct(opt.target.achieved, 1)} ${unit}) instead.
       Add a ${isVol ? (opt.target.bound === 'low' ? 'lower-risk' : 'higher-risk') : (opt.target.bound === 'high' ? 'higher-returning' : 'lower-returning')} holding to widen the range.</div>`;
@@ -614,6 +782,12 @@ const OBJ_LABEL = {
   parity: 'Risk parity', equal: 'Equal weight',
   targetvol: 'Max return', targetret: 'Min volatility',
 };
+/* The objective currently selected, so constraint edits re-solve the same one. */
+function currentObjective() {
+  const on = $('optPanel').querySelector('[data-obj].on');
+  return on ? on.dataset.obj : null;
+}
+
 /* Constrained objectives read better with the target baked into the label. */
 function objLabel(objective, target) {
   if (objective === 'targetvol') return 'Max return @ ' + FMT.pct(target, 1) + ' vol';
@@ -719,6 +893,38 @@ function bindEvents() {
     $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.classList.toggle('on', x === b));
     renderOptimizer(b.dataset.obj);
   });
+  /* constraint rows: min/max entry, enable switch, category reassignment */
+  /* Record the edit immediately and debounce only the expensive re-solve.
+     Debouncing the state update itself would collapse edits to two different
+     inputs into one call and silently drop the earlier one. */
+  const resolveSoon = debounce(() => { if (state.last) renderOptimizer(currentObjective()); }, 500);
+  $('cnRows').addEventListener('input', e => {
+    const inp = e.target.closest('[data-cn]');
+    if (!inp) return;
+    const key = inp.dataset.cn, side = inp.dataset.side;
+    const raw = inp.value.trim();
+    const b = constraintState.bounds[key] || (constraintState.bounds[key] = {});
+    b[side] = raw === '' ? null : Math.max(0, Math.min(100, parseFloat(raw) || 0)) / 100;
+    if (b.lo == null && b.hi == null) delete constraintState.bounds[key];
+    persistConstraints();
+    resolveSoon();
+  });
+
+  $('cnEnable').addEventListener('change', e => {
+    constraintState.on = e.target.checked;
+    persistConstraints();
+    if (state.last) renderOptimizer(currentObjective());
+  });
+
+  $('cnAssign').addEventListener('change', e => {
+    const sel = e.target.closest('[data-assign]');
+    if (!sel) return;
+    SUBCLASS_OVERRIDE[sel.dataset.assign] = sel.value;
+    persistConstraints();
+    renderHoldings();
+    if (state.last) { renderDonuts(state.last); renderOptimizer(currentObjective()); }
+  });
+
   // Enter in a target box solves it, rather than doing nothing
   [['tgtVol', 'targetvol'], ['tgtRet', 'targetret']].forEach(([id, obj]) => {
     $(id).addEventListener('keydown', e => {

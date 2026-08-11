@@ -79,6 +79,41 @@ says so, reports the closest achievable portfolio, and tells you what kind of
 holding would widen the range — rather than quietly returning a clamped answer
 as if it met the request.
 
+#### Asset allocation constraints
+
+Every objective can be solved subject to minimum and maximum weights per asset
+class and per subcategory — "equity 50–60%, fixed income 30–40%, at least 5%
+international". Holdings are classified automatically and anything can be
+reassigned by hand.
+
+| Class | Subcategories |
+| --- | --- |
+| **Equity** | Large Cap Growth · Large Cap Value · Large Cap Blend · Small Cap Growth · Small Cap Value · International |
+| **Fixed Income** | Intermediate · Long-Term · Short-Term / Cash |
+| **Alternatives** | Hedge Funds · Commodities · Real Estate · Crypto |
+
+Large Cap Blend, the short/long fixed income splits, real estate and crypto sit
+alongside the core categories because filing SPY under "large cap growth" or TLT
+under "intermediate" would be wrong.
+
+Constraints are enforced by projecting every optimizer iterate onto the feasible
+set
+
+```
+{ w : w ≥ 0, Σw = 1, loᵍ ≤ Σ_{i∈g} wᵢ ≤ hiᵍ for every category g }
+```
+
+Groups are disjoint within a level but overlap across levels (Equity contains
+Large Cap Growth), so each level gets its own exact projection and **Dykstra's
+algorithm** reconciles them with the sum-to-one constraint — alternating plain
+projections would land somewhere in the intersection but not the nearest point.
+
+Contradictory limits are caught before solving and explained ("the minimums add
+up to 115%", "subcategory minimums inside Equity add up to 45%, above its 30%
+maximum"). If a limit can't be met because nothing in the portfolio belongs to
+that category, the result says which one and by how much rather than quietly
+returning something that breaks it.
+
 The **efficient frontier** is traced by sweeping a risk-aversion parameter `γ`
 through `min wᵀΣw − γ(w·μ)`, solved with projected gradient descent onto the
 probability simplex. Sweeping `γ` is used rather than pinning a target return

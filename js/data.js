@@ -51,6 +51,7 @@ const UNIVERSE = [
   { s: 'VUG',  n: 'US Growth',               cls: 'us' },
   { s: 'VTV',  n: 'US Value',                cls: 'us' },
   { s: 'VBR',  n: 'US Small-Cap Value',      cls: 'us' },
+  { s: 'VBK',  n: 'US Small-Cap Growth',     cls: 'us' },
   { s: 'SCHD', n: 'US Dividend',             cls: 'us' },
   { s: 'VXUS', n: 'Total International',      cls: 'intl' },
   { s: 'VEA',  n: 'Developed Markets',       cls: 'intl' },
@@ -66,6 +67,7 @@ const UNIVERSE = [
   { s: 'SLV',  n: 'Silver',                  cls: 'alt' },
   { s: 'DBC',  n: 'Commodities',             cls: 'alt' },
   { s: 'VNQ',  n: 'US Real Estate',          cls: 'alt' },
+  { s: 'QAI',  n: 'Hedge Fund Multi-Strat',  cls: 'alt' },
   { s: 'BIL',  n: '1-3 Mo T-Bills (cash)',   cls: 'cash' },
   { s: 'AAPL', n: 'Apple',                   cls: 'stock' },
   { s: 'MSFT', n: 'Microsoft',               cls: 'stock' },
@@ -80,6 +82,63 @@ const UNIVERSE_MAP = UNIVERSE.reduce((m, a) => (m[a.s] = a, m), {});
 function assetMeta(sym) {
   return UNIVERSE_MAP[sym] || { s: sym, n: sym, cls: 'stock' };
 }
+
+/* ======================== asset class taxonomy ==========================
+   Three top-level classes, each split into subcategories. Constraints can be
+   set at either level, and every subcategory rolls up into exactly one class,
+   so the constraint groups never overlap.
+
+   Alongside the core subcategories there are a few extra buckets — large cap
+   blend, short and long fixed income, real estate, crypto — because filing
+   SPY under "large cap growth" or TLT under "intermediate fixed income" would
+   simply be wrong. Any holding can be reassigned by hand in the builder. */
+const CLASSES = {
+  equity: { name: 'Equity',       color: '#3563E9' },
+  fixed:  { name: 'Fixed Income', color: '#22B8A6' },
+  alts:   { name: 'Alternatives', color: '#F4A63B' },
+};
+
+const SUBCLASSES = {
+  lcg:      { name: 'Large Cap Growth',          cls: 'equity' },
+  lcv:      { name: 'Large Cap Value',           cls: 'equity' },
+  lcb:      { name: 'Large Cap Blend',           cls: 'equity' },
+  scg:      { name: 'Small Cap Growth',          cls: 'equity' },
+  scv:      { name: 'Small Cap Value',           cls: 'equity' },
+  intl:     { name: 'International',             cls: 'equity' },
+  fi_int:   { name: 'Intermediate Fixed Income', cls: 'fixed'  },
+  fi_long:  { name: 'Long-Term Fixed Income',    cls: 'fixed'  },
+  fi_short: { name: 'Short-Term / Cash',         cls: 'fixed'  },
+  hedge:    { name: 'Hedge Funds',               cls: 'alts'   },
+  comm:     { name: 'Commodities',               cls: 'alts'   },
+  re:       { name: 'Real Estate',               cls: 'alts'   },
+  crypto:   { name: 'Crypto',                    cls: 'alts'   },
+  other:    { name: 'Unclassified',              cls: 'alts'   },
+};
+
+/* Ticker → subcategory. Anything unknown lands in `other` until reassigned. */
+const SUBCLASS_OF = {
+  SPY: 'lcb', VOO: 'lcb', VTI: 'lcb',
+  QQQ: 'lcg', VUG: 'lcg',
+  VTV: 'lcv', SCHD: 'lcv',
+  VBK: 'scg', VBR: 'scv',
+  VXUS: 'intl', VEA: 'intl', VWO: 'intl',
+  BND: 'fi_int', AGG: 'fi_int', IEI: 'fi_int', LQD: 'fi_int', TIP: 'fi_int',
+  TLT: 'fi_long',
+  SHY: 'fi_short', BIL: 'fi_short',
+  QAI: 'hedge', MNA: 'hedge', BTAL: 'hedge',
+  GLD: 'comm', SLV: 'comm', DBC: 'comm',
+  VNQ: 're',
+  'BTC/USD': 'crypto', 'ETH/USD': 'crypto',
+  AAPL: 'lcg', MSFT: 'lcg', NVDA: 'lcg', AMZN: 'lcg', GOOGL: 'lcg',
+};
+
+/* User reassignments live here (persisted by app.js) and beat the defaults. */
+const SUBCLASS_OVERRIDE = {};
+
+function subclassOf(sym) { return SUBCLASS_OVERRIDE[sym] || SUBCLASS_OF[sym] || 'other'; }
+function classOf(sym) { return (SUBCLASSES[subclassOf(sym)] || SUBCLASSES.other).cls; }
+function subclassName(k) { return (SUBCLASSES[k] || SUBCLASSES.other).name; }
+function className(k) { return (CLASSES[k] || { name: k }).name; }
 
 /* Distinct, colour-blind-friendlier palette for allocation slices. */
 const SLICE_COLORS = [
@@ -168,6 +227,13 @@ const DEMO_SPEC = {
   VEA:  { mu: 0.06,  sig: 0.17, beta: 0.86, seed: 106 },
   VWO:  { mu: 0.07,  sig: 0.20, beta: 0.90, seed: 107 },
   VBR:  { mu: 0.10,  sig: 0.20, beta: 1.05, seed: 108 },
+  VBK:  { mu: 0.095, sig: 0.22, beta: 1.12, seed: 118 },
+  VUG:  { mu: 0.115, sig: 0.19, beta: 1.10, seed: 119 },
+  VTV:  { mu: 0.085, sig: 0.15, beta: 0.92, seed: 120 },
+  SCHD: { mu: 0.09,  sig: 0.14, beta: 0.88, seed: 121 },
+  QAI:  { mu: 0.035, sig: 0.06, beta: 0.30, seed: 122 },
+  TIP:  { mu: 0.032, sig: 0.06, beta: 0.05, seed: 123 },
+  LQD:  { mu: 0.035, sig: 0.08, beta: 0.15, seed: 124 },
   BND:  { mu: 0.03,  sig: 0.055,beta: -0.05,seed: 109 },
   AGG:  { mu: 0.03,  sig: 0.055,beta: -0.05,seed: 110 },
   TLT:  { mu: 0.035, sig: 0.14, beta: -0.30,seed: 111 },
