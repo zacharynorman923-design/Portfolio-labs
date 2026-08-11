@@ -385,6 +385,7 @@ function renderResults(R) {
   renderDrawdown(R);
   yearBars($('yearChart'), m.yearly);
   renderCorr(R);
+  renderOptimizer(null);          // frontier + current-mix marker, no objective yet
 }
 
 function statCard(k, v, cls) {
@@ -491,6 +492,99 @@ function renderCorr(R) {
   heatmap($('corrChart'), correlationMatrix(R.aligned, run.syms), run.syms);
 }
 
+/* ----------------------------- optimizer -------------------------------- */
+/* Which portfolio the optimizer, correlations and projection act on. */
+function focusKey() {
+  if (!state.last) return 'A';
+  return state.last.keys.length > 1 ? mcWhich() : 'A';
+}
+
+function renderOptimizer(objective) {
+  const R = state.last;
+  const out = $('optOut');
+  if (!R) return;
+  const which = focusKey();
+  const run = R.runs[which];
+  $('optTag').textContent = (R.keys.length > 1 ? 'portfolio ' + which + ' · ' : '')
+    + 'long-only · fully invested';
+
+  if (run.syms.length < 2) {
+    out.innerHTML = '<div class="note">Add at least two holdings to optimize.</div>';
+    $('frontierChart').innerHTML = '';
+    return;
+  }
+
+  const stats = assetStats(R.aligned, run.syms);
+  if (!stats) {
+    out.innerHTML = '<div class="note">Need at least 12 months of overlapping history to optimize. Try a longer period.</div>';
+    $('frontierChart').innerHTML = '';
+    return;
+  }
+
+  const cur = evaluateWeights(stats, run.holds.map(h => +h.weight), R.rf);
+  const opt = objective ? optimizePortfolio(stats, objective, R.rf) : null;
+
+  // frontier + markers
+  const frontier = efficientFrontier(stats.mu, stats.cov, 40);
+  const assetDots = run.syms.map((s, i) => ({
+    label: s, vol: Math.sqrt(stats.cov[i][i]), ret: stats.mu[i],
+  }));
+  const marks = [{ label: 'Current', vol: cur.vol, ret: cur.ret, color: PORT_COLOR[which] }];
+  if (opt) marks.push({ label: OBJ_LABEL[objective], vol: opt.vol, ret: opt.ret, color: 'var(--gold)' });
+  frontierChart($('frontierChart'), frontier, assetDots, marks);
+
+  if (!opt) {
+    out.innerHTML = `<div class="opt-hint">Your current mix is marked on the frontier below —
+      pick an objective above to see a suggested set of weights.</div>`;
+    return;
+  }
+
+  const delta = (a, b) => {
+    const d = a - b;
+    return `<span class="${signClass(d)}">${d >= 0 ? '+' : ''}${(d * 100).toFixed(2)}%</span>`;
+  };
+  const rows = run.syms.map((s, i) => {
+    const now = cur.weights[i], next = opt.weights[i];
+    return `<div class="ow-row">
+      <span class="ow-sym">${esc(s)}</span>
+      <span class="ow-now">${FMT.pct(now, 1)}</span>
+      <span class="ow-arrow">→</span>
+      <span class="ow-next">${FMT.pct(next, 1)}</span>
+      <span class="ow-bar"><i style="width:${(Math.min(1, next) * 100).toFixed(1)}%"></i></span>
+      <span class="ow-rc">${FMT.pct(opt.rc[i], 0)}</span>
+    </div>`;
+  }).join('');
+
+  out.innerHTML = `
+    <div class="opt-compare">
+      <div class="oc-col"><div class="oc-h">Current</div>
+        <div class="oc-v">${FMT.num(cur.sharpe)}</div><div class="oc-k">Sharpe</div>
+        <div class="oc-sub">${FMT.pct(cur.ret, 1)} return · ${FMT.pct(cur.vol, 1)} vol</div></div>
+      <div class="oc-col opt"><div class="oc-h">${esc(OBJ_LABEL[objective])}</div>
+        <div class="oc-v">${FMT.num(opt.sharpe)}</div><div class="oc-k">Sharpe ${delta(opt.sharpe, cur.sharpe)}</div>
+        <div class="oc-sub">${FMT.pct(opt.ret, 1)} return · ${FMT.pct(opt.vol, 1)} vol</div></div>
+    </div>
+    <div class="ow-head"><span>Holding</span><span>Now</span><span></span><span>Suggested</span><span></span><span>Risk</span></div>
+    ${rows}
+    <button class="chip-btn apply" id="applyOpt">Apply these weights to Portfolio ${which}</button>
+    <div class="opt-foot">“Risk” is each holding’s share of total portfolio risk, which is
+      why risk parity’s weights look uneven while its risk split is equal.</div>`;
+
+  $('applyOpt').addEventListener('click', () => {
+    state.portfolios[which] = run.syms.map((s, i) => ({ sym: s, weight: +(opt.weights[i] * 100).toFixed(2) }));
+    if (state.compare) { state.active = which; syncCompareUI(); }
+    renderHoldings();
+    setStatus('Applied ' + OBJ_LABEL[objective].toLowerCase() + ' weights to Portfolio ' + which
+      + ' — hit Analyze to backtest them.', 'ok');
+    document.querySelector('.builder-tools').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+const OBJ_LABEL = {
+  sharpe: 'Max Sharpe', minvol: 'Min volatility',
+  parity: 'Risk parity', equal: 'Equal weight',
+};
+
 /* ---------------------------- Monte Carlo ------------------------------ */
 function mcWhich() {
   const v = $('mcWhich').value;
@@ -579,7 +673,16 @@ function bindEvents() {
 
   ['periodSel', 'benchSel', 'rebalSel', 'rfInput', 'totalReturnToggle'].forEach(id => $(id).addEventListener('change', persist));
   $('logToggle').addEventListener('change', () => { if (state.last) renderGrowth(state.last); });
-  $('mcWhich').addEventListener('change', () => { runMonteCarlo(); if (state.last) renderCorr(state.last); });
+  $('mcWhich').addEventListener('change', () => {
+    runMonteCarlo();
+    if (state.last) { renderCorr(state.last); renderOptimizer(null); }
+  });
+  $('optPanel').addEventListener('click', e => {
+    const b = e.target.closest('[data-obj]');
+    if (!b || !state.last) return;
+    $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.classList.toggle('on', x === b));
+    renderOptimizer(b.dataset.obj);
+  });
   ['mcInitial', 'mcMonthly', 'mcYears', 'mcGoal'].forEach(id => $(id).addEventListener('input', debounce(runMonteCarlo, 250)));
 
   $('settingsBtn').addEventListener('click', () => openSettings());

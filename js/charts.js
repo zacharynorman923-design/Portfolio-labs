@@ -198,6 +198,49 @@ function fanChart(el, mc, opts = {}) {
     + goalLine + xt + `</svg>`;
 }
 
+/* -------------------------- efficient frontier -------------------------- */
+/* frontier: [{vol, ret}] ascending by vol. assets/points: labelled markers. */
+function frontierChart(el, frontier, assets, points) {
+  const W = 860, H = 380, P = { t: 18, r: 20, b: 42, l: 62 };
+  if (!frontier || frontier.length < 2) { el.innerHTML = ''; return; }
+  const allV = frontier.map(p => p.vol).concat(assets.map(a => a.vol), points.map(p => p.vol));
+  const allR = frontier.map(p => p.ret).concat(assets.map(a => a.ret), points.map(p => p.ret));
+  const vMin = Math.min(...allV), vMax = Math.max(...allV);
+  const rMin = Math.min(...allR), rMax = Math.max(...allR);
+  const vPad = (vMax - vMin) * 0.12 || 0.01, rPad = (rMax - rMin) * 0.14 || 0.01;
+  const X = scaler(Math.max(0, vMin - vPad), vMax + vPad, P.l, W - P.r);
+  const Y = scaler(rMin - rPad, rMax + rPad, H - P.b, P.t);
+
+  let grid = '';
+  for (let k = 0; k <= 4; k++) {
+    const r = (rMin - rPad) + ((rMax + rPad) - (rMin - rPad)) * k / 4, y = Y(r);
+    grid += `<line class="c-grid" x1="${P.l}" y1="${y.toFixed(1)}" x2="${W - P.r}" y2="${y.toFixed(1)}"/>`
+      + `<text class="c-axis" x="${P.l - 8}" y="${(y + 3.5).toFixed(1)}" text-anchor="end">${FMT.pct(r, 1)}</text>`;
+  }
+  for (let k = 0; k <= 4; k++) {
+    const v = Math.max(0, vMin - vPad) + ((vMax + vPad) - Math.max(0, vMin - vPad)) * k / 4, x = X(v);
+    grid += `<text class="c-axis" x="${x.toFixed(1)}" y="${H - 22}" text-anchor="middle">${FMT.pct(v, 1)}</text>`;
+  }
+  grid += `<text class="c-axis ax-title" x="${(W / 2).toFixed(0)}" y="${H - 6}" text-anchor="middle">volatility (annualized)</text>`;
+  grid += `<text class="c-axis ax-title" transform="translate(14,${(H / 2).toFixed(0)}) rotate(-90)" text-anchor="middle">expected return</text>`;
+
+  let curve = '';
+  frontier.forEach((p, i) => { curve += (i ? 'L' : 'M') + X(p.vol).toFixed(1) + ' ' + Y(p.ret).toFixed(1); });
+
+  const dots = assets.map(a =>
+    `<circle cx="${X(a.vol).toFixed(1)}" cy="${Y(a.ret).toFixed(1)}" r="4" fill="var(--muted-line)" opacity=".85"/>`
+    + `<text class="c-axis" x="${(X(a.vol) + 7).toFixed(1)}" y="${(Y(a.ret) + 3.5).toFixed(1)}">${esc(a.label)}</text>`).join('');
+
+  const marks = points.map(p =>
+    `<circle cx="${X(p.vol).toFixed(1)}" cy="${Y(p.ret).toFixed(1)}" r="7" fill="${p.color}" stroke="var(--panel)" stroke-width="2"/>`
+    + `<text class="fr-mark" x="${(X(p.vol)).toFixed(1)}" y="${(Y(p.ret) - 13).toFixed(1)}" text-anchor="middle" fill="${p.color}">${esc(p.label)}</text>`).join('');
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Efficient frontier">`
+    + grid
+    + `<path d="${curve}" fill="none" stroke="var(--accent)" stroke-width="2.2" opacity=".9"/>`
+    + dots + marks + `</svg>`;
+}
+
 /* ------------------------- yearly returns bars -------------------------- */
 function yearBars(el, yearly) {
   const W = 860, H = 200, P = { t: 14, r: 12, b: 26, l: 46 };

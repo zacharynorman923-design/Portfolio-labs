@@ -46,10 +46,47 @@ request limits.
   run them side by side: both plotted on the growth and drawdown charts, an
   extra column in the metrics table, both allocations, and a selector for which
   one the correlation matrix and Monte Carlo project.
+- **Optimization** — find better weights for the holdings you already have:
+  **max Sharpe** (tangency), **min volatility**, **risk parity** (equal risk
+  contribution) or **equal weight**, plotted against the **efficient frontier**
+  with your current mix marked on it. One click applies the suggested weights.
+  See [Optimization](#optimization).
 - **Total return** — optionally reinvest dividends instead of measuring price
   only (see below).
 - **Refresh data** — prices are cached for 12 hours to protect your free quota;
   this button forces a fresh pull when you want today's close.
+
+### Optimization
+
+The optimizer works on the holdings and period currently on screen, using the
+annualized covariance of their monthly returns. Every result is **long-only and
+fully invested** (`w ≥ 0`, `Σw = 1`) — no shorting, no leverage.
+
+| Objective | What it solves for |
+| --- | --- |
+| **Max Sharpe** | Highest `(return − risk-free) / volatility` — the tangency portfolio |
+| **Min volatility** | Smallest achievable portfolio variance |
+| **Risk parity** | Every holding contributes an equal share of total risk |
+| **Equal weight** | The naive `1/n` baseline, for reference |
+
+The **efficient frontier** is traced by sweeping a risk-aversion parameter `γ`
+through `min wᵀΣw − γ(w·μ)`, solved with projected gradient descent onto the
+probability simplex. Sweeping `γ` is used rather than pinning a target return
+with a penalty term: a penalty stiff enough to hold the return constraint
+forces a tiny step size, which leaves the variance under-minimised and draws a
+frontier that sits inside the true one.
+
+The **Risk** column is each holding's share of total portfolio risk
+(`wᵢ(Σw)ᵢ / wᵀΣw`). It can go slightly negative for a strong diversifier — an
+asset that reduces total risk carries a negative marginal contribution. That's
+also why risk parity's *weights* look uneven while its *risk* split is exactly
+equal.
+
+> **Optimizing on past returns is not a forecast.** Max Sharpe in particular
+> concentrates into whatever happened to perform best over the window, and
+> expected-return estimates are far noisier than covariance estimates. Treat it
+> as a study of the period, not a recommendation. Min volatility and risk parity
+> depend only on covariance and tend to be more stable out of sample.
 
 ### Total return vs price return
 
@@ -101,6 +138,7 @@ Cloudflare Pages) with no build command and `/` as the publish directory.
 | `js/data.js` | Ticker universe, real lazy-portfolio allocations, formatting, offline demo series |
 | `js/providers.js` | Live-data adapters (Twelve Data, Alpha Vantage) — daily history + quotes |
 | `js/stats.js` | The engine: backtest, metrics, correlations, VaR/CVaR, Monte Carlo |
+| `js/optimize.js` | Optimization: covariance, efficient frontier, max Sharpe, min variance, risk parity |
 | `js/charts.js` | Inline-SVG charts (growth, drawdown, donut, heatmap, fan, bars) |
 | `js/app.js` | State, data fetching, rendering, interactions, persistence |
 | `manifest.webmanifest`, `sw.js` | PWA install + offline app shell |
