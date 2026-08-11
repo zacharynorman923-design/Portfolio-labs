@@ -331,7 +331,12 @@ async function analyze(force) {
       runs[k].rel = benchBt ? relativeMetrics(runs[k].dates, runs[k].values, benchBt.dates, benchBt.values, rf) : {};
     });
 
-    state.last = { keys, runs, bench, benchBt, aligned, rf, totalReturn: wantTR, trWarn };
+    const holdSyms = [];
+    keys.forEach(k => sets[k].forEach(h => { if (!holdSyms.includes(h.sym)) holdSyms.push(h.sym); }));
+    state.last = {
+      keys, runs, bench, benchBt, aligned, rf, totalReturn: wantTR, trWarn,
+      seriesMap, limiting: limitingHolding(seriesMap, holdSyms),
+    };
     renderResults(state.last);
     runMonteCarlo();
     setRunning(false);
@@ -386,6 +391,7 @@ function renderResults(R) {
   renderDrawdown(R);
   yearBars($('yearChart'), m.yearly);
   renderCorr(R);
+  renderHistoryPanel(R);
   renderOptimizer(null);          // frontier + current-mix marker, no objective yet
 }
 
@@ -617,6 +623,160 @@ function renderConstraints(run) {
   }).length;
   $('cnCount').textContent = constraintState.on && n ? n + ' active' : (n ? n + ' set · off' : '');
   $('cnEnable').checked = constraintState.on;
+}
+
+/* ------------------ longer-history substitute finder -------------------- */
+/* The backtest can only span the window every holding shares, so the holding
+   that starts latest sets the start date for everything. */
+function limitingHolding(seriesMap, syms) {
+  let worst = null;
+  syms.forEach(s => {
+    const ser = seriesMap[s];
+    if (!ser || !ser.length) return;
+    const start = ser[0].date;
+    if (!worst || start > worst.start) worst = { sym: s, start, n: ser.length };
+  });
+  if (!worst) return null;
+  // how much earlier everything else begins
+  let secondStart = null;
+  syms.forEach(s => {
+    if (s === worst.sym) return;
+    const ser = seriesMap[s];
+    if (!ser || !ser.length) return;
+    if (!secondStart || ser[0].date > secondStart) secondStart = ser[0].date;
+  });
+  worst.nextStart = secondStart;
+  return worst;
+}
+
+/* Fetch each candidate and MEASURE it: real first date, and how closely its
+   monthly returns track the fund being replaced over their shared window.
+   Nothing is recommended on the strength of the curated list alone. */
+async function evaluateSubstitutes(sym, seriesMap, limitDate) {
+  const cands = substitutesFor(sym);
+  const original = seriesMap[sym];
+  const out = [];
+  for (const c of cands) {
+    let ser;
+    try { ser = await fetchDaily(c, false); }
+    catch (e) { out.push({ sym: c, error: e.message }); continue; }
+    if (!ser || ser.length < 60) { out.push({ sym: c, error: 'Too little history returned.' }); continue; }
+
+    // correlation of monthly returns over the period both cover
+    const al = alignSeries({ a: original, b: ser }, ['a', 'b']);
+    let corr = null, months = 0;
+    if (al.dates.length > 40) {
+      const ra = monthlyReturns(al.dates, al.closes.a).map(x => x.r);
+      const rb = monthlyReturns(al.dates, al.closes.b).map(x => x.r);
+      months = Math.min(ra.length, rb.length);
+      if (months >= 12) {
+        const A = ra.slice(-months), B = rb.slice(-months);
+        const ma = S.mean(A), mb = S.mean(B);
+        let cov = 0, va = 0, vb = 0;
+        for (let i = 0; i < months; i++) {
+          cov += (A[i] - ma) * (B[i] - mb); va += (A[i] - ma) ** 2; vb += (B[i] - mb) ** 2;
+        }
+        corr = (va > 0 && vb > 0) ? cov / Math.sqrt(va * vb) : null;
+      }
+    }
+    out.push({
+      sym: c, start: ser[0].date, corr, overlapMonths: months,
+      gainDays: Math.max(0, (new Date(limitDate) - new Date(ser[0].date)) / 864e5),
+    });
+  }
+  // best = starts earliest, among those that actually track well
+  out.sort((a, b) => {
+    if (a.error) return 1; if (b.error) return -1;
+    return a.start < b.start ? -1 : 1;
+  });
+  return out;
+}
+
+const SUB_CORR_OK = 0.90;   // below this it isn't really the same exposure
+
+async function findSubstitutes() {
+  if (!state.last) return;
+  const R = state.last;
+  const btn = $('subBtn'), out = $('subOut');
+  const lim = R.limiting;
+  if (!lim) return;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Checking…';
+  out.innerHTML = '<div class="cn-hint">Fetching candidates and measuring how closely they track…</div>';
+  try {
+    const res = await evaluateSubstitutes(lim.sym, R.seriesMap, lim.start);
+    if (!res.length) {
+      out.innerHTML = '<div class="cn-hint">No longer-history stand-in is listed for '
+        + esc(lim.sym) + '. Adding one manually still works — anything with a longer record will do.</div>';
+      return;
+    }
+    const rows = res.map(r => {
+      if (r.error) {
+        return `<div class="sb-row bad"><span class="sb-sym">${esc(r.sym)}</span>
+          <span class="sb-note">unavailable — ${esc(r.error)}</span></div>`;
+      }
+      const years = ((new Date(lim.start) - new Date(r.start)) / 864e5 / 365.25);
+      /* Swapping only helps until the next-shortest holding takes over as the
+         binding one, so report the history this would actually unlock rather
+         than how far back the candidate itself goes. */
+      const newStart = (lim.nextStart && r.start < lim.nextStart) ? lim.nextStart : r.start;
+      const gain = (new Date(lim.start) - new Date(newStart)) / 864e5 / 365.25;
+      const good = r.corr != null && r.corr >= SUB_CORR_OK;
+      const useful = gain > 0.25;
+      const capped = years - gain > 0.5;
+      return `<div class="sb-row${good && useful ? '' : ' weak'}">
+        <span class="sb-sym">${esc(r.sym)}</span>
+        <span class="sb-note">
+          from <b>${FMT.date(r.start)}</b>
+          ${useful ? '· adds <span class="up">' + gain.toFixed(1) + ' yrs</span>' : '· adds nothing over ' + esc(lim.sym)}
+          ${r.corr != null ? '· tracks ' + esc(lim.sym) + ' <b>' + r.corr.toFixed(2) + '</b>' : '· correlation unavailable'}
+          ${capped && useful ? '<br><span class="sb-cap">goes back ' + years.toFixed(1)
+              + ' yrs further, but the window then stops at your next-shortest holding</span>' : ''}
+        </span>
+        ${good && useful ? `<button class="chip-btn sb-use" data-sub="${esc(r.sym)}">Use it</button>` : '<span class="sb-skip">—</span>'}
+      </div>`;
+    }).join('');
+    out.innerHTML = `<div class="cn-hint">Measured against your data provider — start dates and
+      correlations below are read from the actual series, not assumed. A correlation under
+      ${SUB_CORR_OK.toFixed(2)} means it isn't really the same exposure.</div>` + rows;
+  } catch (err) {
+    out.innerHTML = '<div class="cn-status bad">' + esc(err.message || 'Could not check substitutes.') + '</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+/* Swap the limiting holding for the chosen stand-in, keeping its weight. */
+function applySubstitute(newSym) {
+  const R = state.last;
+  if (!R || !R.limiting) return;
+  const oldSym = R.limiting.sym;
+  const which = focusKey();
+  const list = state.portfolios[which];
+  const idx = list.findIndex(h => h.sym === oldSym);
+  if (idx < 0) return;
+  list[idx] = { sym: newSym, weight: list[idx].weight };
+  renderHoldings();
+  setStatus('Swapped ' + oldSym + ' for ' + newSym + ' in Portfolio ' + which
+    + ' — hit Analyze to rerun over the longer history.', 'ok');
+  $('runBtn').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function renderHistoryPanel(R) {
+  const panel = $('histPanel');
+  const lim = R.limiting;
+  if (!lim || !lim.nextStart || R.runs.A.syms.length < 2) { panel.classList.add('hidden'); return; }
+  const gainYears = (new Date(lim.start) - new Date(lim.nextStart)) / 864e5 / 365.25;
+  if (gainYears < 0.5) { panel.classList.add('hidden'); return; }   // nothing meaningful to gain
+  panel.classList.remove('hidden');
+  $('histBody').innerHTML =
+    `<p class="note"><b>${esc(lim.sym)}</b> starts ${FMT.date(lim.start)} — the latest of your holdings,
+      so the whole backtest begins there. Everything else goes back to at least ${FMT.date(lim.nextStart)},
+      about <b>${gainYears.toFixed(1)} more years</b> that are currently unused.</p>
+     <div class="style-row"><button class="chip-btn" id="subBtn">Find a longer-history stand-in</button></div>
+     <div id="subOut" class="style-out"></div>`;
+  $('subBtn').addEventListener('click', findSubstitutes);
 }
 
 /* --------------------------- style analysis ----------------------------- */
@@ -1011,6 +1171,11 @@ function bindEvents() {
     constraintState.on = e.target.checked;
     persistConstraints();
     if (state.last) renderOptimizer(currentObjective());
+  });
+
+  $('histPanel').addEventListener('click', e => {
+    const b = e.target.closest('[data-sub]');
+    if (b) applySubstitute(b.dataset.sub);
   });
 
   $('styleBtn').addEventListener('click', detectStyles);

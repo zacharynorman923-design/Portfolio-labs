@@ -193,6 +193,56 @@ const LAZY = [
   },
 ];
 
+/* ==================== longer-history substitutes ========================
+   A backtest can only run over the window every holding shares, so one recent
+   ETF drags the whole study forward. Index mutual funds usually predate their
+   ETF equivalents by a decade or more, so they make good stand-ins.
+
+   These are CANDIDATES ONLY. The app fetches each one and reports its real
+   first date and its actual return correlation with the fund being replaced —
+   nothing here is presented to the user as fact until the data confirms it. */
+const SUBSTITUTES = {
+  VTI:   ['VTSMX', 'VFINX', 'SPY'],
+  VOO:   ['VFINX', 'SPY', 'VTSMX'],
+  SPY:   ['VFINX'],
+  QQQ:   ['VIGRX'],
+  VUG:   ['VIGRX'],
+  VTV:   ['VIVAX'],
+  SCHD:  ['VIVAX', 'VDIGX'],
+  VBR:   ['VISVX'],
+  VBK:   ['VISGX'],
+  VXUS:  ['VGTSX', 'EFA'],
+  VEA:   ['VGTSX', 'EFA'],
+  VWO:   ['VEIEX', 'EEM'],
+  BND:   ['VBMFX', 'AGG'],
+  AGG:   ['VBMFX'],
+  TLT:   ['VUSTX'],
+  IEI:   ['VFITX'],
+  SHY:   ['VFISX'],
+  BIL:   ['VFISX'],
+  TIP:   ['VIPSX'],
+  LQD:   ['VWESX'],
+  VNQ:   ['VGSIX'],
+  GLD:   ['IAU'],
+  SLV:   ['IAU'],
+};
+
+/* Fall back to any older fund in the same subcategory when the ticker itself
+   has no listed stand-in. */
+const SUBSTITUTE_BY_SUBCLASS = {
+  lcb: ['VTSMX', 'VFINX'], lcg: ['VIGRX'], lcv: ['VIVAX'],
+  scg: ['VISGX'], scv: ['VISVX'], intl: ['VGTSX', 'EFA'],
+  fi_int: ['VBMFX'], fi_long: ['VUSTX'], fi_short: ['VFISX'],
+  re: ['VGSIX'],
+};
+
+function substitutesFor(sym) {
+  const direct = SUBSTITUTES[sym] || [];
+  const byClass = SUBSTITUTE_BY_SUBCLASS[subclassOf(sym)] || [];
+  const all = direct.concat(byClass.filter(s => !direct.includes(s)));
+  return all.filter(s => s !== sym);
+}
+
 /* ----------------------------------------------------------------------- *
    OFFLINE DEMO DATA — clearly synthetic.
    A seeded generator builds ~12 years of daily closes for a handful of
@@ -258,30 +308,79 @@ function demoMarketPath(days) {
   return out;
 }
 
+/* Older index-fund stand-ins, so the substitute finder is demoable offline.
+   `yrs` gives each one a longer synthetic history than its ETF equivalent. */
+const DEMO_PROXY = {
+  VTSMX: { of: 'VTI',  yrs: 26 }, VFINX: { of: 'SPY',  yrs: 30 },
+  VIGRX: { of: 'VUG',  yrs: 26 }, VIVAX: { of: 'VTV',  yrs: 26 },
+  VISVX: { of: 'VBR',  yrs: 22 }, VISGX: { of: 'VBK',  yrs: 22 },
+  VGTSX: { of: 'VXUS', yrs: 24 }, VBMFX: { of: 'BND',  yrs: 28 },
+  VUSTX: { of: 'TLT',  yrs: 28 }, VFISX: { of: 'SHY',  yrs: 26 },
+  VGSIX: { of: 'VNQ',  yrs: 24 }, VIPSX: { of: 'TIP',  yrs: 20 },
+};
+/* A few tickers get a deliberately short demo history so the limiting-holding
+   logic has something to find. */
+const DEMO_SHORT = { VXUS: 7, SCHD: 8, QAI: 9, VBK: 10 };
+
 const DEMO_YEARS = 12;
 function buildDemoSeries(sym) {
+  const proxy = DEMO_PROXY[sym];
+  if (proxy) {
+    /* A proxy is the same underlying series extended further back, which is
+       what a longer-lived share class of the same index looks like. */
+    // same seed as the fund it stands in for, so the two track closely
+    const base = DEMO_SPEC[proxy.of];
+    if (base) return buildDemoFrom(base, proxy.yrs);
+  }
   const spec = DEMO_SPEC[sym];
   if (!spec) return null;
-  const days = Math.round(DEMO_YEARS * 252);
-  const market = demoMarketPath(days);
-  const rng = mulberry32(spec.seed);
+  return buildDemoFrom(spec, DEMO_SHORT[sym] || DEMO_YEARS);
+}
+
+const DEMO_MAX_YEARS = 30;   // longest synthetic history any proxy gets
+
+/* Every demo series ENDS today and starts `years` back, so a shorter history
+   begins later — which is what makes one holding the binding constraint. All
+   of them read the same shared market factor at the same calendar offset, so
+   series of different lengths still co-move correctly where they overlap. */
+/* Per-asset idiosyncratic shocks, generated once over the full timeline and
+   indexed by absolute calendar position. Two series sharing a seed therefore
+   see identical shocks on the same dates — which is what makes a proxy track
+   the fund it stands in for, exactly as another share class of one index would. */
+const _IDIO = {};
+function idioPath(seed, maxDays) {
+  if (_IDIO[seed] && _IDIO[seed].length >= maxDays) return _IDIO[seed];
+  const rng = mulberry32(seed);
+  const out = new Array(maxDays);
+  for (let i = 0; i < maxDays; i++) out[i] = gauss(rng);
+  _IDIO[seed] = out;
+  return out;
+}
+
+function buildDemoFrom(spec, years) {
+  const days = Math.round(years * 252);
+  const maxDays = Math.round(DEMO_MAX_YEARS * 252);
+  const market = demoMarketPath(maxDays);
+  const shocks = idioPath(spec.seed, maxDays);
+  const offset = maxDays - days;                    // align to the same timeline
   const dailyMu = spec.mu / 252;
   // idiosyncratic vol left after removing the market-factor contribution
   const idio = Math.sqrt(Math.max(0.0001, spec.sig * spec.sig - Math.pow(spec.beta * 0.16, 2))) / Math.sqrt(252);
-  const start = new Date();
-  start.setFullYear(start.getFullYear() - DEMO_YEARS);
+
+  /* Step dates BACKWARD from today so every series ends now and only its start
+     differs — stepping forward from the start made long series end years ago. */
+  const today = new Date();
+  const values = new Array(days);
   let price = 100;
-  const values = [];
   for (let i = 0; i < days; i++) {
-    const shock = spec.beta * market[i] + idio * gauss(rng);
+    const shock = spec.beta * market[offset + i] + idio * shocks[offset + i];
     price *= Math.exp(dailyMu - 0.5 * (spec.sig * spec.sig) / 252 + shock);
-    // ~5 trading days a week starting from `start`
-    const d = new Date(start.getTime());
-    d.setDate(d.getDate() + Math.floor(i * 7 / 5));
-    values.push({ date: d.toISOString().slice(0, 10), close: +price.toFixed(4) });
+    const d = new Date(today.getTime());
+    d.setDate(d.getDate() - Math.floor((days - 1 - i) * 7 / 5));
+    values[i] = { date: d.toISOString().slice(0, 10), close: +price.toFixed(4) };
   }
   return values;
 }
 
-const DEMO_SYMBOLS = Object.keys(DEMO_SPEC);
-function demoAvailable(sym) { return !!DEMO_SPEC[sym]; }
+const DEMO_SYMBOLS = Object.keys(DEMO_SPEC).concat(Object.keys(DEMO_PROXY));
+function demoAvailable(sym) { return !!DEMO_SPEC[sym] || !!DEMO_PROXY[sym]; }

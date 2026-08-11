@@ -55,6 +55,16 @@ request limits.
   only (see below).
 - **Refresh data** — prices are cached for 12 hours to protect your free quota;
   this button forces a fresh pull when you want today's close.
+- **Longer-history stand-ins** — a backtest can only span the window every
+  holding shares, so one recent ETF drags the whole study forward. The
+  **History** panel names the holding that's binding, how much history that
+  costs you, and proposes older equivalents (index mutual funds usually predate
+  their ETF share class by a decade). Each candidate is **fetched and measured**
+  — its real first date and its actual return correlation with the fund it would
+  replace — so nothing is recommended on the strength of a lookup table alone.
+  Candidates tracking below 0.90 aren't offered. The gain shown is the history
+  actually unlocked, which stops at your *next*-shortest holding, not how far
+  back the candidate itself goes.
 
 ### Optimization
 
