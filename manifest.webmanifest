@@ -1,0 +1,14 @@
+{
+  "name": "Portfolio Labs — analyze & backtest portfolios",
+  "short_name": "Portfolio Labs",
+  "description": "Build a portfolio, pull live market data, and backtest returns, drawdowns, Sharpe & Sortino, correlations, VaR and a Monte Carlo projection.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0E1116",
+  "theme_color": "#0E1116",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
