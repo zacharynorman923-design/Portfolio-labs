@@ -652,38 +652,41 @@ function limitingHolding(seriesMap, syms) {
 /* Fetch each candidate and MEASURE it: real first date, and how closely its
    monthly returns track the fund being replaced over their shared window.
    Nothing is recommended on the strength of the curated list alone. */
+/* Measure one candidate against the fund it would replace. */
+async function measureCandidate(cand, original, limitDate) {
+  let ser;
+  try { ser = await fetchDaily(cand, false); }
+  catch (e) { return { sym: cand, error: e.message }; }
+  if (!ser || ser.length < 60) return { sym: cand, error: 'Too little history returned.' };
+
+  // correlation of monthly returns over the period both cover
+  const al = alignSeries({ a: original, b: ser }, ['a', 'b']);
+  let corr = null, months = 0;
+  if (al.dates.length > 40) {
+    const ra = monthlyReturns(al.dates, al.closes.a).map(x => x.r);
+    const rb = monthlyReturns(al.dates, al.closes.b).map(x => x.r);
+    months = Math.min(ra.length, rb.length);
+    if (months >= 12) {
+      const A = ra.slice(-months), B = rb.slice(-months);
+      const ma = S.mean(A), mb = S.mean(B);
+      let cov = 0, va = 0, vb = 0;
+      for (let i = 0; i < months; i++) {
+        cov += (A[i] - ma) * (B[i] - mb); va += (A[i] - ma) ** 2; vb += (B[i] - mb) ** 2;
+      }
+      corr = (va > 0 && vb > 0) ? cov / Math.sqrt(va * vb) : null;
+    }
+  }
+  return {
+    sym: cand, start: ser[0].date, corr, overlapMonths: months,
+    gainDays: Math.max(0, (new Date(limitDate) - new Date(ser[0].date)) / 864e5),
+  };
+}
+
 async function evaluateSubstitutes(sym, seriesMap, limitDate) {
   const cands = substitutesFor(sym);
   const original = seriesMap[sym];
   const out = [];
-  for (const c of cands) {
-    let ser;
-    try { ser = await fetchDaily(c, false); }
-    catch (e) { out.push({ sym: c, error: e.message }); continue; }
-    if (!ser || ser.length < 60) { out.push({ sym: c, error: 'Too little history returned.' }); continue; }
-
-    // correlation of monthly returns over the period both cover
-    const al = alignSeries({ a: original, b: ser }, ['a', 'b']);
-    let corr = null, months = 0;
-    if (al.dates.length > 40) {
-      const ra = monthlyReturns(al.dates, al.closes.a).map(x => x.r);
-      const rb = monthlyReturns(al.dates, al.closes.b).map(x => x.r);
-      months = Math.min(ra.length, rb.length);
-      if (months >= 12) {
-        const A = ra.slice(-months), B = rb.slice(-months);
-        const ma = S.mean(A), mb = S.mean(B);
-        let cov = 0, va = 0, vb = 0;
-        for (let i = 0; i < months; i++) {
-          cov += (A[i] - ma) * (B[i] - mb); va += (A[i] - ma) ** 2; vb += (B[i] - mb) ** 2;
-        }
-        corr = (va > 0 && vb > 0) ? cov / Math.sqrt(va * vb) : null;
-      }
-    }
-    out.push({
-      sym: c, start: ser[0].date, corr, overlapMonths: months,
-      gainDays: Math.max(0, (new Date(limitDate) - new Date(ser[0].date)) / 864e5),
-    });
-  }
+  for (const c of cands) out.push(await measureCandidate(c, original, limitDate));
   // best = starts earliest, among those that actually track well
   out.sort((a, b) => {
     if (a.error) return 1; if (b.error) return -1;
@@ -711,11 +714,24 @@ async function findSubstitutes() {
         + esc(lim.sym) + '. Adding one manually still works — anything with a longer record will do.</div>';
       return;
     }
-    const rows = res.map(r => {
-      if (r.error) {
-        return `<div class="sb-row bad"><span class="sb-sym">${esc(r.sym)}</span>
-          <span class="sb-note">unavailable — ${esc(r.error)}</span></div>`;
-      }
+    const rows = res.map(r => substituteRow(r, lim)).join('');
+    out.innerHTML = `<div class="cn-hint">Measured against your data provider — start dates and
+      correlations below are read from the actual series, not assumed. A correlation under
+      ${SUB_CORR_OK.toFixed(2)} means it isn't really the same exposure.</div>` + rows;
+  } catch (err) {
+    out.innerHTML = '<div class="cn-status bad">' + esc(err.message || 'Could not check substitutes.') + '</div>';
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
+/* One measured candidate, rendered the same whether it came from the curated
+   list or was typed in by hand. */
+function substituteRow(r, lim) {
+  if (r.error) {
+    return `<div class="sb-row bad"><span class="sb-sym">${esc(r.sym)}</span>
+      <span class="sb-note">unavailable — ${esc(r.error)}</span></div>`;
+  }
       const years = ((new Date(lim.start) - new Date(r.start)) / 864e5 / 365.25);
       /* Swapping only helps until the next-shortest holding takes over as the
          binding one, so report the history this would actually unlock rather
@@ -736,14 +752,32 @@ async function findSubstitutes() {
         </span>
         ${good && useful ? `<button class="chip-btn sb-use" data-sub="${esc(r.sym)}">Use it</button>` : '<span class="sb-skip">—</span>'}
       </div>`;
-    }).join('');
-    out.innerHTML = `<div class="cn-hint">Measured against your data provider — start dates and
-      correlations below are read from the actual series, not assumed. A correlation under
-      ${SUB_CORR_OK.toFixed(2)} means it isn't really the same exposure.</div>` + rows;
+}
+
+/* Check a ticker the user names — sibling share classes, a predecessor fund,
+   anything. Same measurement, so the verdict is comparable. */
+async function checkTicker() {
+  const R = state.last;
+  if (!R || !R.limiting) return;
+  const inp = $('subCheck');
+  const sym = (inp.value || '').trim().toUpperCase();
+  const out = $('subManual');
+  if (!sym) { inp.focus(); return; }
+  out.innerHTML = '<div class="cn-hint">Checking ' + esc(sym) + '…</div>';
+  const btn = $('subCheckBtn');
+  btn.disabled = true;
+  try {
+    const r = await measureCandidate(sym, R.seriesMap[R.limiting.sym], R.limiting.start);
+    let extra = '';
+    if (!r.error && r.corr == null) {
+      extra = `<div class="cn-hint">Not enough overlap with ${esc(R.limiting.sym)} to judge whether
+        it's the same exposure — compare them yourself before swapping.</div>`;
+    }
+    out.innerHTML = substituteRow(r, R.limiting) + extra;
   } catch (err) {
-    out.innerHTML = '<div class="cn-status bad">' + esc(err.message || 'Could not check substitutes.') + '</div>';
+    out.innerHTML = '<div class="cn-status bad">' + esc(err.message || 'Could not check that ticker.') + '</div>';
   } finally {
-    btn.disabled = false; btn.textContent = label;
+    btn.disabled = false;
   }
 }
 
@@ -775,8 +809,20 @@ function renderHistoryPanel(R) {
       so the whole backtest begins there. Everything else goes back to at least ${FMT.date(lim.nextStart)},
       about <b>${gainYears.toFixed(1)} more years</b> that are currently unused.</p>
      <div class="style-row"><button class="chip-btn" id="subBtn">Find a longer-history stand-in</button></div>
-     <div id="subOut" class="style-out"></div>`;
+     <div id="subOut" class="style-out"></div>
+     <div class="sb-manual">
+       <label class="tgt-lab" for="subCheck">Or check a specific ticker — an older share class,
+         a predecessor fund, anything you have in mind:</label>
+       <div class="tgt-row">
+         <input id="subCheck" type="text" autocomplete="off" spellcheck="false"
+                placeholder="e.g. ${esc((substitutesFor(lim.sym)[0]) || 'VFINX')}" aria-label="Ticker to check">
+         <button class="chip-btn" id="subCheckBtn">Check</button>
+       </div>
+       <div id="subManual" class="style-out"></div>
+     </div>`;
   $('subBtn').addEventListener('click', findSubstitutes);
+  $('subCheckBtn').addEventListener('click', checkTicker);
+  $('subCheck').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checkTicker(); } });
 }
 
 /* --------------------------- style analysis ----------------------------- */

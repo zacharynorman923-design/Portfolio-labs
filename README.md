@@ -64,7 +64,14 @@ request limits.
   replace — so nothing is recommended on the strength of a lookup table alone.
   Candidates tracking below 0.90 aren't offered. The gain shown is the history
   actually unlocked, which stops at your *next*-shortest holding, not how far
-  back the candidate itself goes.
+  back the candidate itself goes. You can also **check any ticker by name** —
+  an older share class, a predecessor fund — and get the same measured verdict.
+
+  Worth knowing when a fund's fact sheet reaches back further than the app
+  does: a fact sheet often splices in the *strategy's* track record from an
+  earlier vehicle, while a price feed only carries that share class's own NAV
+  history from its inception. Those are different series, and the older one
+  isn't available from any provider.
 
 ### Optimization
 
