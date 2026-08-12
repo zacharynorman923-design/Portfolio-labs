@@ -185,9 +185,23 @@ const MSTAR_CATEGORY = {
   'digital assets': 'crypto',
 };
 
-/* Categories excluded by default when importing a universe: regional and
-   global sleeves, which most policy allocations handle separately. */
-const DEFAULT_EXCLUDED_SUBCLASSES = ['region', 'global', 'global_smid'];
+/* Categories excluded by default when importing a universe. These encode a
+   policy decision rather than a data limitation, so every one is a checkbox in
+   the importer and can be switched back on:
+     - regional / single-country and global sleeves are handled separately
+     - international is carried by one blend sleeve, so the style-split and
+       small/mid foreign buckets are folded away
+     - emerging markets is held inside a combined international fund, not
+       allocated on its own
+     - municipal exposure is intermediate-only
+     - taxable fixed income is core-plus only                                */
+const DEFAULT_EXCLUDED_SUBCLASSES = [
+  'region', 'global', 'global_smid',
+  'intl_g', 'intl_v', 'intl_smid',
+  'em',
+  'muni_short', 'muni_long', 'muni_hy',
+  'fi_mbs', 'fi_sec',
+];
 
 function normalizeCategory(s) {
   return String(s || '').toLowerCase()
