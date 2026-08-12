@@ -232,8 +232,15 @@ const SUBCLASS_OF = {
 /* User reassignments live here (persisted by app.js) and beat the defaults. */
 const SUBCLASS_OVERRIDE = {};
 
-function subclassOf(sym) { return SUBCLASS_OVERRIDE[sym] || SUBCLASS_OF[sym] || 'other'; }
+/* Always resolves to a subcategory that exists. Saved settings can outlive a
+   taxonomy change and refer to keys that have since been renamed or removed,
+   and a stale key must degrade to Unclassified rather than crash the page. */
+function validSubclass(k) { return (k && SUBCLASSES[k]) ? k : null; }
+function subclassOf(sym) {
+  return validSubclass(SUBCLASS_OVERRIDE[sym]) || validSubclass(SUBCLASS_OF[sym]) || 'other';
+}
 function classOf(sym) { return (SUBCLASSES[subclassOf(sym)] || SUBCLASSES.other).cls; }
+function classOfSubclass(k) { return (SUBCLASSES[k] || SUBCLASSES.other).cls; }
 function subclassName(k) { return (SUBCLASSES[k] || SUBCLASSES.other).name; }
 function className(k) { return (CLASSES[k] || { name: k }).name; }
 

@@ -602,7 +602,7 @@ function renderConstraints(run) {
   const shown = (key, isSub) => {
     const b = constraintState.bounds[key] || {};
     if (isSub && b.rel) {
-      const par = cw.byClass[SUBCLASSES[key].cls] || 0;
+      const par = cw.byClass[classOfSubclass(key)] || 0;
       return par > 1e-9 ? (cw.bySub[key] || 0) / par : 0;
     }
     return isSub ? cw.bySub[key] : cw.byClass[key];
@@ -613,7 +613,7 @@ function renderConstraints(run) {
     let html = `<div class="cn-head"><span>Category</span><span>Now</span><span>Min / Max</span></div>`;
     classes.forEach(c => {
       html += row(c, className(c), 'class', shown(c, false));
-      subs.filter(s => SUBCLASSES[s].cls === c)
+      subs.filter(s => classOfSubclass(s) === c)
           .forEach(s => { html += row(s, subclassName(s), 'sub', shown(s, true), true); });
     });
     $('cnRows').innerHTML = html;
@@ -1014,8 +1014,17 @@ function loadConstraints() {
     const s = JSON.parse(localStorage.getItem('plabs_constraints_v1') || 'null');
     if (!s) return;
     constraintState.on = !!s.on;
-    constraintState.bounds = s.bounds || {};
-    Object.keys(s.overrides || {}).forEach(k => { SUBCLASS_OVERRIDE[k] = s.overrides[k]; });
+    /* Discard anything referring to a category that no longer exists — saved
+       settings can predate a taxonomy change, and carrying a dead key forward
+       would break every lookup that trusts it. */
+    const bounds = s.bounds || {};
+    constraintState.bounds = {};
+    Object.keys(bounds).forEach(k => {
+      if (CLASSES[k] || SUBCLASSES[k]) constraintState.bounds[k] = bounds[k];
+    });
+    Object.keys(s.overrides || {}).forEach(k => {
+      if (SUBCLASSES[s.overrides[k]]) SUBCLASS_OVERRIDE[k] = s.overrides[k];
+    });
   } catch (e) {}
 }
 
