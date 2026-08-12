@@ -1027,7 +1027,14 @@ function renderOptimizer(objective) {
   if (objective === 'targetvol') target = clampNum($('tgtVol').value, 0, 100, cur.vol * 100) / 100;
   if (objective === 'targetret') target = clampNum($('tgtRet').value, -100, 1000, cur.ret * 100) / 100;
 
-  const opt = objective ? optimizePortfolio(stats, objective, R.rf, target, active) : null;
+  /* Path-dependent objectives are scored on the real backtest, so they need
+     the aligned prices, the rebalance rule and the benchmark — not just the
+     covariance matrix. */
+  const ctx = {
+    aligned: R.aligned, rebal: $('rebalSel').value, benchBt: R.benchBt,
+    current: cur.weights.slice(),
+  };
+  const opt = objective ? optimizePortfolio(stats, objective, R.rf, target, active, ctx) : null;
 
   // frontier + markers
   const frontier = efficientFrontier(stats.mu, stats.cov, active.length ? 26 : 40, active);
@@ -1064,6 +1071,15 @@ function renderOptimizer(objective) {
      plainly and show what was solved instead — never present a clamped answer
      as though it met the request. */
   let infeasible = '';
+  if (objective === 'maxalpha' && !R.bench) {
+    infeasible += `<div class="opt-warn"><b>Alpha needs a benchmark.</b> Pick one in the
+      Benchmark selector above and analyze again.</div>`;
+  }
+  if (objective === 'maxalpha' && R.bench && (!active || !active.length)) {
+    infeasible += `<div class="opt-warn"><b>Alpha is linear in the weights</b>, so with no
+      allocation limits the best answer is nearly always a single holding — whichever had the
+      highest alpha over this window. Set some limits above to get a diversified answer.</div>`;
+  }
   if (opt.violations && opt.violations.length) {
     infeasible += `<div class="opt-warn"><b>Couldn’t meet ${opt.violations.length === 1 ? 'one limit' : 'some limits'}.</b> `
       + opt.violations.map(v => esc(v.name) + ' came out at ' + FMT.pct(v.actual, 1)
@@ -1109,6 +1125,8 @@ const OBJ_LABEL = {
   sharpe: 'Max Sharpe', minvol: 'Min volatility',
   parity: 'Risk parity', equal: 'Equal weight',
   targetvol: 'Max return', targetret: 'Min volatility',
+  sortino: 'Max Sortino', calmar: 'Max Calmar', mindd: 'Min drawdown',
+  minvar: 'Min VaR', maxalpha: 'Max alpha',
 };
 /* The objective currently selected, so constraint edits re-solve the same one. */
 function currentObjective() {
@@ -1219,7 +1237,20 @@ function bindEvents() {
     const b = e.target.closest('[data-obj]');
     if (!b || !state.last) return;
     $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.classList.toggle('on', x === b));
-    renderOptimizer(b.dataset.obj);
+    /* Searching the real backtest takes noticeably longer than the closed-form
+       solvers, so show it working rather than freezing silently. */
+    const heavy = PATH_OBJECTIVES.indexOf(b.dataset.obj) !== -1;
+    if (!heavy) { renderOptimizer(b.dataset.obj); return; }
+    const prev = b.textContent;
+    b.textContent = 'Searching…';
+    $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.disabled = true);
+    setTimeout(() => {
+      try { renderOptimizer(b.dataset.obj); }
+      finally {
+        b.textContent = prev;
+        $('optPanel').querySelectorAll('[data-obj]').forEach(x => x.disabled = false);
+      }
+    }, 30);
   });
   /* constraint rows: min/max entry, enable switch, category reassignment */
   /* Record the edit immediately and debounce only the expensive re-solve.

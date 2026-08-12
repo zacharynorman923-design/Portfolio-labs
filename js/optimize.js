@@ -472,14 +472,125 @@ function riskParity(cov, iters, groups) {
   return w;
 }
 
+/* ================== path-dependent objectives ============================
+   Sharpe, variance and the frontier are smooth functions of the weights, so
+   gradient descent handles them. Sortino, Calmar, maximum drawdown and VaR are
+   not: drawdown depends on the ORDER of returns, and VaR is a quantile, so both
+   are non-smooth and have no usable gradient. Alpha is smooth but linear, which
+   over a simplex means its unconstrained optimum is always a single holding.
+
+   These are therefore optimized by direct search on the real backtest — the
+   same `backtest()` and `metrics()` the results panel reports, so the number
+   being maximized is exactly the number displayed, not a proxy for it.      */
+
+/* Score a weight vector on the requested metric. Higher is always better, so
+   the minimising objectives are negated. */
+function makeObjective(kind, ctx) {
+  const { aligned, syms, rebal, rf, benchBt } = ctx;
+  return function (w) {
+    const wm = {};
+    let any = false;
+    syms.forEach((s, i) => { wm[s] = w[i]; if (w[i] > 1e-9) any = true; });
+    if (!any) return -Infinity;
+    const bt = backtest(aligned, wm, rebal);
+    if (!bt.values || bt.values.length < 3) return -Infinity;
+    const m = metrics(bt.dates, bt.values, { rf });
+    switch (kind) {
+      case 'sortino':  return isFinite(m.sortino) ? m.sortino : -Infinity;
+      case 'calmar':   return isFinite(m.calmar) ? m.calmar : -Infinity;
+      case 'mindd':    return isFinite(m.maxDrawdown) ? m.maxDrawdown : -Infinity;  // negative, toward 0
+      case 'minvar':   return isFinite(m.var95) ? -m.var95 : -Infinity;
+      case 'maxalpha': {
+        if (!benchBt) return -Infinity;
+        const rel = relativeMetrics(bt.dates, bt.values, benchBt.dates, benchBt.values, rf);
+        return (rel && isFinite(rel.alpha)) ? rel.alpha : -Infinity;
+      }
+      default: return -Infinity;
+    }
+  };
+}
+
+/* Pattern search over the feasible set: repeatedly shift weight from one
+   holding to another at a shrinking step size, keeping any move that improves
+   the score. Deterministic, needs no derivatives, and every point it visits is
+   projected back onto the constraints so it never leaves the feasible set. */
+function patternSearch(score, n, groups, seeds, budget) {
+  const project = (w) => (groups && groups.length)
+    ? projectFeasible(w, groups, 1e-9, 200) : projectSimplex(w);
+  let evals = 0;
+  const cap = budget || 4000;
+  const evalAt = (w) => { evals++; return score(w); };
+
+  let best = null;
+  (seeds || []).forEach(s => {
+    if (!s) return;
+    const w = project(s.slice());
+    const f = evalAt(w);
+    if (isFinite(f) && (!best || f > best.f)) best = { w, f };
+  });
+  if (!best) {
+    const w = project(new Array(n).fill(1 / n));
+    best = { w, f: evalAt(w) };
+  }
+
+  let w = best.w.slice(), f = best.f;
+  let step = 0.25;
+  while (step > 0.0025 && evals < cap) {
+    let improved = false;
+    for (let i = 0; i < n && evals < cap; i++) {
+      if (w[i] <= 1e-9) continue;
+      for (let j = 0; j < n && evals < cap; j++) {
+        if (i === j) continue;
+        const move = Math.min(step, w[i]);
+        if (move <= 1e-9) continue;
+        const cand = w.slice();
+        cand[i] -= move; cand[j] += move;
+        const pw = project(cand);
+        const pf = evalAt(pw);
+        if (pf > f + 1e-12) { w = pw; f = pf; improved = true; }
+      }
+    }
+    if (!improved) step /= 2;          // no gain at this scale — look finer
+  }
+  return { w, f, evals };
+}
+
+/* Optimize one of the path-dependent objectives. `seeds` should include the
+   smooth optima (min-vol, max-Sharpe, risk parity) and the current mix — they
+   are excellent starting points and make the search far cheaper. */
+function optimizePath(kind, ctx, rf, groups, seeds) {
+  const n = ctx.syms.length;
+  const score = makeObjective(kind, ctx);
+  const res = patternSearch(score, n, groups, seeds, 4000);
+  let w = res.w.map(x => x < 1e-4 ? 0 : x);
+  const sum = w.reduce((s, x) => s + x, 0) || 1;
+  w = w.map(x => x / sum);
+  if (groups && groups.length) w = projectFeasible(w, groups, 1e-11, 800);
+  return w;
+}
+
 /* ------------------------------ entry point ----------------------------- */
 /* Runs one objective and returns everything the UI needs to explain it. */
-function optimizePortfolio(stats, objective, rf, target, groups) {
+const PATH_OBJECTIVES = ['sortino', 'calmar', 'mindd', 'minvar', 'maxalpha'];
+
+function optimizePortfolio(stats, objective, rf, target, groups, ctx) {
   const { mu, cov, syms } = stats;
   let w, info = null;
   const g = (groups && groups.length) ? groups : null;
 
-  if (objective === 'minvol')      w = minVariance(cov, 8000, g);
+  if (PATH_OBJECTIVES.indexOf(objective) !== -1) {
+    /* Seed the search with the smooth optima — they are close to most of these
+       and turn a broad search into a short refinement. */
+    const seeds = [
+      new Array(mu.length).fill(1 / mu.length),
+      minVariance(cov, 4000, g),
+      maxSharpe(mu, cov, rf, g),
+      riskParity(cov, 600, g),
+    ];
+    if (ctx && ctx.current) seeds.push(ctx.current);
+    w = optimizePath(objective, Object.assign({ syms, rf }, ctx), rf, g, seeds);
+  }
+  else if (objective === 'minvol')  w = minVariance(cov, 8000, g);
   else if (objective === 'sharpe') w = maxSharpe(mu, cov, rf, g);
   else if (objective === 'parity') w = riskParity(cov, 3000, g);
   else if (objective === 'targetvol') { info = frontierTarget(mu, cov, 'vol', target, rf, g); w = info.w; }

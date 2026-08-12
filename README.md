@@ -87,6 +87,26 @@ fully invested** (`w ≥ 0`, `Σw = 1`) — no shorting, no leverage.
 | **Equal weight** | The naive `1/n` baseline, for reference |
 | **Max return at a given volatility** | "I can live with 12% volatility — get me the most return available at that risk" |
 | **Min volatility for a given return** | "I need 8% a year — get me there with the least risk" |
+| **Max Sortino** | Best return per unit of *downside* deviation |
+| **Max Calmar** | Best CAGR relative to the worst drawdown |
+| **Min drawdown** | Shallowest peak-to-trough loss |
+| **Min VaR** | Smallest 95% monthly value-at-risk |
+| **Max alpha** | Most return unexplained by the benchmark |
+
+The last five are **path-dependent or non-smooth**: drawdown depends on the
+*order* of returns and VaR is a quantile, so neither has a usable gradient.
+They're solved by direct search — pattern search over the feasible set, scoring
+each candidate on the **actual backtest** with `backtest()` and `metrics()`, the
+same functions the results panel reports. The number being maximized is
+therefore exactly the number displayed, not a proxy. The search is seeded with
+the closed-form optima (min-vol, max-Sharpe, risk parity) and your current mix,
+which turns a broad search into a short refinement; each finishes in well under
+a second.
+
+Note that **alpha is linear in the weights**, so over a simplex its
+unconstrained optimum is a single holding — whichever had the highest alpha in
+that window. The app says so rather than presenting a one-fund result as a
+portfolio; apply allocation limits to get a diversified answer.
 
 The last two are the constrained duals of the same frontier. Both are solved by
 bisecting `γ`, since return and volatility each increase monotonically along the

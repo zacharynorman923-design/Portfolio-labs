@@ -370,3 +370,7 @@ a:hover{text-decoration:underline}
 .sb-manual{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
 .sb-manual .tgt-row input{width:150px;text-align:left;font-family:'JetBrains Mono',monospace;text-transform:uppercase}
 .sb-manual .tgt-lab{margin-bottom:9px}
+.opt-path{align-items:center;margin-top:-8px}
+.opt-group-lab{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);margin-right:4px}
+.opt-buttons .chip-btn:disabled{opacity:.5;cursor:default}
