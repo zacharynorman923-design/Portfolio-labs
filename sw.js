@@ -1,6 +1,6 @@
 /* Portfolio Labs service worker — offline app shell + font caching.
    Bump VERSION on every release so clients discard the old cached shell. */
-const VERSION = 'plabs-v11';
+const VERSION = 'plabs-v12';
 const SHELL = `${VERSION}-shell`;
 const RUNTIME = `${VERSION}-runtime`;
 
@@ -14,6 +14,7 @@ const SHELL_ASSETS = [
   './js/stats.js',
   './js/optimize.js',
   './js/style.js',
+  './js/universe.js',
   './js/charts.js',
   './js/app.js',
   './manifest.webmanifest',
