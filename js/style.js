@@ -34,7 +34,7 @@ const STYLE_BASIS = [
   { key: 'fi_short', sym: 'BIL' },
   { key: 'comm',     sym: 'DBC' },
   { key: 're',       sym: 'VNQ' },
-  { key: 'hedge',    sym: 'QAI' },
+  { key: 'alt_multi', sym: 'QAI' },
 ];
 
 const STYLE_MIN_MONTHS = 30;   // below this the fit is too unstable to report

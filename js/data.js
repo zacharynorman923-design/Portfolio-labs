@@ -99,21 +99,103 @@ const CLASSES = {
 };
 
 const SUBCLASSES = {
+  /* --- Equity: US --- */
   lcg:      { name: 'Large Cap Growth',          cls: 'equity' },
   lcv:      { name: 'Large Cap Value',           cls: 'equity' },
   lcb:      { name: 'Large Cap Blend',           cls: 'equity' },
+  mcg:      { name: 'Mid Cap Growth',            cls: 'equity' },
+  mcv:      { name: 'Mid Cap Value',             cls: 'equity' },
   scg:      { name: 'Small Cap Growth',          cls: 'equity' },
   scv:      { name: 'Small Cap Value',           cls: 'equity' },
-  intl:     { name: 'International',             cls: 'equity' },
+  scb:      { name: 'Small Cap Blend',           cls: 'equity' },
+  eqinc:    { name: 'Equity Income / Derivative',cls: 'equity' },
+  /* --- Equity: non-US --- */
+  intl:     { name: 'International Blend',       cls: 'equity' },
+  intl_g:   { name: 'International Growth',      cls: 'equity' },
+  intl_v:   { name: 'International Value',       cls: 'equity' },
+  intl_smid:{ name: 'International Small/Mid',   cls: 'equity' },
+  em:       { name: 'Emerging Markets',          cls: 'equity' },
+  region:   { name: 'Regional / Single Country', cls: 'equity' },
+  global:   { name: 'Global Equity',             cls: 'equity' },
+  global_smid:{ name: 'Global Small/Mid',        cls: 'equity' },
+  /* --- Fixed income: taxable --- */
   fi_int:   { name: 'Intermediate Fixed Income', cls: 'fixed'  },
   fi_long:  { name: 'Long-Term Fixed Income',    cls: 'fixed'  },
   fi_short: { name: 'Short-Term / Cash',         cls: 'fixed'  },
-  hedge:    { name: 'Hedge Funds',               cls: 'alts'   },
+  fi_mbs:   { name: 'Mortgage-Backed',           cls: 'fixed'  },
+  fi_sec:   { name: 'Securitized',               cls: 'fixed'  },
+  fi_hy:    { name: 'High Yield Taxable',        cls: 'fixed'  },
+  /* --- Fixed income: municipal --- */
+  muni_short:{ name: 'Muni Short',               cls: 'fixed'  },
+  muni_int: { name: 'Muni Intermediate',         cls: 'fixed'  },
+  muni_long:{ name: 'Muni Long',                 cls: 'fixed'  },
+  muni_hy:  { name: 'Muni High Yield',           cls: 'fixed'  },
+  /* --- Alternatives --- */
   comm:     { name: 'Commodities',               cls: 'alts'   },
+  comm_foc: { name: 'Commodities Focused',       cls: 'alts'   },
+  alt_trend:{ name: 'Systematic Trend',          cls: 'alts'   },
+  alt_multi:{ name: 'Multistrategy',             cls: 'alts'   },
+  alt_macro:{ name: 'Macro Trading',             cls: 'alts'   },
+  alt_ls:   { name: 'Long-Short Equity',         cls: 'alts'   },
+  alt_mn:   { name: 'Equity Market Neutral',     cls: 'alts'   },
+  alt_rv:   { name: 'Relative Value Arbitrage',  cls: 'alts'   },
+  alt_ed:   { name: 'Event Driven',              cls: 'alts'   },
+  alt_hedged:{ name: 'Equity Hedged',            cls: 'alts'   },
   re:       { name: 'Real Estate',               cls: 'alts'   },
   crypto:   { name: 'Crypto',                    cls: 'alts'   },
   other:    { name: 'Unclassified',              cls: 'alts'   },
 };
+
+/* Morningstar category -> taxonomy. Keys are lower-cased and stripped of
+   punctuation so small spelling differences between exports still match. */
+const MSTAR_CATEGORY = {
+  'large growth': 'lcg', 'large value': 'lcv', 'large blend': 'lcb',
+  'mid cap growth': 'mcg', 'mid cap value': 'mcv', 'mid cap blend': 'scb',
+  'small growth': 'scg', 'small value': 'scv', 'small blend': 'scb',
+  'derivative income': 'eqinc', 'equity income': 'eqinc',
+  'foreign large blend': 'intl', 'foreign large growth': 'intl_g',
+  'foreign large value': 'intl_v',
+  'foreign small mid blend': 'intl_smid', 'foreign small mid growth': 'intl_smid',
+  'foreign small mid value': 'intl_smid',
+  'diversified emerging mkts': 'em', 'diversified emerging markets': 'em',
+  'global large stock blend': 'global', 'global large stock growth': 'global',
+  'global large stock value': 'global', 'global small mid stock': 'global_smid',
+  'europe stock': 'region', 'japan stock': 'region', 'greater china region': 'region',
+  'india equity': 'region', 'pacific asia ex japan stk': 'region',
+  'pacific asia ex japan stock': 'region', 'focused region': 'region',
+  'latin america stock': 'region', 'china region': 'region',
+  'intermediate core plus bond': 'fi_int', 'intermediate core bond': 'fi_int',
+  'intermediate government': 'fi_int', 'corporate bond': 'fi_int',
+  'long government': 'fi_long', 'long term bond': 'fi_long',
+  'ultrashort bond': 'fi_short', 'short term bond': 'fi_short',
+  'short government': 'fi_short', 'money market taxable': 'fi_short',
+  'government mortgage backed bond': 'fi_mbs',
+  'securitized bond diversified': 'fi_sec', 'securitized bond': 'fi_sec',
+  'high yield bond': 'fi_hy', 'bank loan': 'fi_hy',
+  'muni national short': 'muni_short', 'muni national interm': 'muni_int',
+  'muni national intermediate': 'muni_int', 'muni national long': 'muni_long',
+  'high yield muni': 'muni_hy',
+  'commodities broad basket': 'comm', 'commodities focused': 'comm_foc',
+  'systematic trend': 'alt_trend', 'managed futures': 'alt_trend',
+  'multistrategy': 'alt_multi', 'macro trading': 'alt_macro',
+  'long short equity': 'alt_ls', 'equity market neutral': 'alt_mn',
+  'relative value arbitrage': 'alt_rv', 'event driven': 'alt_ed',
+  'equity hedged': 'alt_hedged', 'options trading': 'alt_hedged',
+  'real estate': 're', 'global real estate': 're',
+  'digital assets': 'crypto',
+};
+
+/* Categories excluded by default when importing a universe: regional and
+   global sleeves, which most policy allocations handle separately. */
+const DEFAULT_EXCLUDED_SUBCLASSES = ['region', 'global', 'global_smid'];
+
+function normalizeCategory(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function subclassFromCategory(cat) {
+  return MSTAR_CATEGORY[normalizeCategory(cat)] || null;
+}
 
 /* Ticker → subcategory. Anything unknown lands in `other` until reassigned. */
 const SUBCLASS_OF = {
@@ -125,7 +207,8 @@ const SUBCLASS_OF = {
   BND: 'fi_int', AGG: 'fi_int', IEI: 'fi_int', LQD: 'fi_int', TIP: 'fi_int',
   TLT: 'fi_long',
   SHY: 'fi_short', BIL: 'fi_short',
-  QAI: 'hedge', MNA: 'hedge', BTAL: 'hedge',
+  QAI: 'alt_multi', MNA: 'alt_ed', BTAL: 'alt_mn',
+  MBXIX: 'alt_multi',
   GLD: 'comm', SLV: 'comm', DBC: 'comm',
   VNQ: 're',
   'BTC/USD': 'crypto', 'ETH/USD': 'crypto',
