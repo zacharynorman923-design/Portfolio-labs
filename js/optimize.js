@@ -226,7 +226,9 @@ function projectFeasible(w, groups, tol, maxIter) {
 function constraintsFeasible(groups, n) {
   if (!groups || !groups.length) return { ok: true };
   const byLevel = {};
-  groups.forEach(g => { (byLevel[g.level || 'x'] = byLevel[g.level || 'x'] || []).push(g); });
+  // relative limits are ratios, not shares of the portfolio, so the
+  // "minimums must not exceed 100%" arithmetic below doesn't apply to them
+  groups.filter(g => !g.rel).forEach(g => { (byLevel[g.level || 'x'] = byLevel[g.level || 'x'] || []).push(g); });
   for (const level in byLevel) {
     const gs = byLevel[level];
     const covered = new Set(); gs.forEach(g => g.idx.forEach(i => covered.add(i)));
@@ -625,8 +627,18 @@ function groupViolations(w, groups) {
   const out = [];
   groups.forEach(g => {
     const s = groupSum(w, g);
-    if (s < g.lo - 5e-4 || s > g.hi + 5e-4) {
-      out.push({ name: g.name, actual: s, lo: g.lo, hi: g.hi });
+    const slack = g.rel ? 5e-4 : 5e-4;
+    if (s < g.lo - slack || s > g.hi + slack) {
+      /* For a ratio limit the raw halfspace value is meaningless to a reader,
+         so report the actual share of the parent it worked out to. */
+      if (g.rel) {
+        let sub = 0, par = 0;
+        g.wtsSub.forEach((v, i) => { sub += v * w[i]; });
+        g.wtsPar.forEach((v, i) => { par += v * w[i]; });
+        out.push({ name: g.name, actual: par > 1e-9 ? sub / par : 0, lo: g.relLo, hi: g.relHi, rel: true });
+      } else {
+        out.push({ name: g.name, actual: s, lo: g.lo, hi: g.hi });
+      }
     }
   });
   return out;
@@ -667,6 +679,51 @@ function buildFractionalGroups(member, bounds, names, level, n) {
       name: (names && names[cat]) || cat, key: cat,
       parent: (level === 'sub' && SUBCLASSES[cat]) ? SUBCLASSES[cat].cls : null,
     });
+  });
+  return groups;
+}
+
+/* Subcategory limits expressed as a share of their PARENT class rather than of
+   the whole portfolio — "large cap growth is 30-40% of equity".
+
+   That is a ratio constraint, which is not linear:
+
+       lo <= (sum over sub) / (sum over parent) <= hi
+
+   but multiplying through by the parent total makes it linear and homogeneous:
+
+       (a_sub - lo * a_parent) . w >= 0
+       (a_sub - hi * a_parent) . w <= 0
+
+   so each bound becomes an ordinary halfspace and drops straight into the same
+   projection used for fractional membership. Note the coefficient vector has
+   negative entries for parent holdings outside the subcategory — that is what
+   makes the limit scale with the parent instead of the portfolio. */
+function buildRelativeGroups(subMember, parentMember, bounds, names, n) {
+  const groups = [];
+  Object.keys(bounds || {}).forEach(cat => {
+    const b = bounds[cat];
+    if (!b || !b.rel) return;
+    const parentKey = SUBCLASSES[cat] && SUBCLASSES[cat].cls;
+    const a = subMember[cat], pa = parentMember[parentKey];
+    if (!a || !pa) return;
+    const lo = b.lo == null ? 0 : b.lo;
+    const hi = b.hi == null ? 1 : b.hi;
+    const label = (names && names[cat]) || cat;
+    const mk = (c, glo, ghi, txt) => ({
+      wts: c, idx: c.map((v, i) => v !== 0 ? i : -1).filter(i => i >= 0),
+      lo: glo, hi: ghi, level: 'rel', rel: true, key: cat, parentKey,
+      relLo: lo, relHi: hi, name: label + ' ' + txt,
+      wtsSub: a, wtsPar: pa,          // kept so violations can report the ratio
+    });
+    if (lo > 1e-9) {
+      groups.push(mk(a.map((v, i) => v - lo * pa[i]), 0, Infinity,
+        '(min ' + Math.round(lo * 100) + '% of ' + className(parentKey) + ')'));
+    }
+    if (hi < 1 - 1e-9) {
+      groups.push(mk(a.map((v, i) => v - hi * pa[i]), -Infinity, 0,
+        '(max ' + Math.round(hi * 100) + '% of ' + className(parentKey) + ')'));
+    }
   });
   return groups;
 }

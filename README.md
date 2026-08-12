@@ -164,6 +164,29 @@ routinely land there: nothing in the basis behaves like them. This is an
 estimate of behaviour, not a holdings lookup — it needs ~30 months of overlap
 and the answer moves with the window, so manual reassignment always wins.
 
+Each subcategory limit can be expressed **either as a share of the whole
+portfolio or as a share of its parent class** — the way allocation policies are
+usually written ("large cap growth is 30-40% *of equity*"). The dropdown beside
+each subcategory row switches between the two, and the "now" figure switches
+with it so the number always matches the limit next to it.
+
+A share-of-parent limit is a ratio, which is not linear:
+
+```
+lo ≤ (Σ over sub) / (Σ over parent) ≤ hi
+```
+
+but multiplying through by the parent total makes it linear and homogeneous:
+
+```
+(a_sub − lo·a_parent) · w ≥ 0        (a_sub − hi·a_parent) · w ≤ 0
+```
+
+so each bound becomes an ordinary halfspace and joins the same projection as
+everything else. The coefficient vector carries negative entries for holdings in
+the parent but outside the subcategory — that is exactly what makes the limit
+scale with the parent rather than with the portfolio.
+
 Constraints are enforced by projecting every optimizer iterate onto the feasible
 set
 

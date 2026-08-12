@@ -374,3 +374,8 @@ a:hover{text-decoration:underline}
 .opt-group-lab{font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.06em;
   text-transform:uppercase;color:var(--muted);margin-right:4px}
 .opt-buttons .chip-btn:disabled{opacity:.5;cursor:default}
+.cn-basis{background:var(--panel);border:1.5px solid var(--line-2);border-radius:7px;padding:4px 5px;
+  color:var(--muted);font-size:10.5px;cursor:pointer;max-width:96px}
+.cn-basis:focus{outline:none;border-color:var(--gold)}
+.cn-row.rel .cn-basis{border-color:var(--gold);color:var(--gold)}
+.cn-row.rel .cn-cur{color:var(--gold)}

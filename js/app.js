@@ -569,7 +569,17 @@ function renderConstraints(run) {
 
   const row = (key, name, level, current, indent) => {
     const b = constraintState.bounds[key] || {};
-    return `<div class="cn-row${indent ? ' sub' : ''}">
+    /* Subcategories can be limited either as a share of the whole portfolio or
+       as a share of their parent class — the way allocation policies are
+       usually written ("growth is 30-40% of equity"). */
+    const parent = indent && SUBCLASSES[key] ? SUBCLASSES[key].cls : null;
+    const basis = parent
+      ? `<select class="cn-basis" data-basis="${key}" aria-label="${esc(name)} limit basis">
+           <option value="abs">of total</option>
+           <option value="rel">of ${esc(className(parent))}</option>
+         </select>`
+      : '<span class="cn-pct">%</span>';
+    return `<div class="cn-row${indent ? ' sub' : ''}${b.rel ? ' rel' : ''}">
       <span class="cn-name">${esc(name)}</span>
       <span class="cn-cur">${FMT.pct(current || 0, 1)}</span>
       <span class="cn-in">
@@ -580,31 +590,49 @@ function renderConstraints(run) {
         <input type="number" min="0" max="100" step="1" placeholder="—"
                data-cn="${key}" data-side="hi" value="${b.hi != null ? +(b.hi * 100).toFixed(1) : ''}"
                aria-label="${esc(name)} maximum %">
-        <span class="cn-pct">%</span>
+        ${basis}
       </span>
     </div>`;
   };
 
   /* Rebuild the rows only when the set of categories actually changes —
      otherwise a re-solve mid-edit would replace the input under the cursor. */
+  /* A relative row shows its share of the PARENT, so the number lines up with
+     the limit next to it rather than silently meaning something else. */
+  const shown = (key, isSub) => {
+    const b = constraintState.bounds[key] || {};
+    if (isSub && b.rel) {
+      const par = cw.byClass[SUBCLASSES[key].cls] || 0;
+      return par > 1e-9 ? (cw.bySub[key] || 0) / par : 0;
+    }
+    return isSub ? cw.bySub[key] : cw.byClass[key];
+  };
+
   const sig = classes.join(',') + '|' + subs.join(',');
   if ($('cnRows').dataset.sig !== sig) {
     let html = `<div class="cn-head"><span>Category</span><span>Now</span><span>Min / Max</span></div>`;
     classes.forEach(c => {
-      html += row(c, className(c), 'class', cw.byClass[c]);
+      html += row(c, className(c), 'class', shown(c, false));
       subs.filter(s => SUBCLASSES[s].cls === c)
-          .forEach(s => { html += row(s, subclassName(s), 'sub', cw.bySub[s], true); });
+          .forEach(s => { html += row(s, subclassName(s), 'sub', shown(s, true), true); });
     });
     $('cnRows').innerHTML = html;
     $('cnRows').dataset.sig = sig;
   } else {
     // same categories: just refresh the "now" column in place
-    const cur = {}; classes.forEach(c => cur[c] = cw.byClass[c]); subs.forEach(s => cur[s] = cw.bySub[s]);
     $('cnRows').querySelectorAll('.cn-row').forEach(r => {
       const key = r.querySelector('[data-cn]');
-      if (key) r.querySelector('.cn-cur').textContent = FMT.pct(cur[key.dataset.cn] || 0, 1);
+      if (!key) return;
+      const k = key.dataset.cn;
+      const isSub = !CLASSES[k];
+      r.querySelector('.cn-cur').textContent = FMT.pct(shown(k, isSub) || 0, 1);
+      r.classList.toggle('rel', !!(constraintState.bounds[k] || {}).rel);
     });
   }
+  // reflect each subcategory's chosen basis
+  $('cnRows').querySelectorAll('[data-basis]').forEach(sel => {
+    sel.value = (constraintState.bounds[sel.dataset.basis] || {}).rel ? 'rel' : 'abs';
+  });
 
   // per-holding category assignment
   const opts = Object.keys(SUBCLASSES).map(k =>
@@ -933,22 +961,45 @@ function buildConstraintGroups(run) {
   Object.keys(CLASSES).forEach(k => clsNames[k] = CLASSES[k].name);
   Object.keys(SUBCLASSES).forEach(k => subNames[k] = SUBCLASSES[k].name);
 
+  const relBounds = {};
   Object.keys(constraintState.bounds).forEach(k => {
     const b = constraintState.bounds[k];
     if (!b || (b.lo == null && b.hi == null)) return;
     const entry = { lo: b.lo == null ? 0 : b.lo, hi: b.hi == null ? 1 : b.hi };
-    if (CLASSES[k]) clsBounds[k] = entry; else if (SUBCLASSES[k]) subBounds[k] = entry;
+    if (CLASSES[k]) clsBounds[k] = entry;
+    else if (SUBCLASSES[k]) {
+      if (b.rel) relBounds[k] = Object.assign({ rel: true }, entry);
+      else subBounds[k] = entry;
+    }
   });
+
+  /* Membership vectors, shared by the absolute and relative builders. */
+  const memberOf = (level) => {
+    const anyFit = syms.some(s => STYLES[s] && STYLES[s].r2 >= STYLE_R2_OK);
+    if (styleUseMix && anyFit) return styleMembership(syms, level);
+    const m = {};
+    syms.forEach((s, i) => {
+      const cat = level === 'class' ? classOf(s) : subclassOf(s);
+      if (!m[cat]) m[cat] = new Array(syms.length).fill(0);
+      m[cat][i] = 1;
+    });
+    return m;
+  };
+  const relGroups = Object.keys(relBounds).length
+    ? buildRelativeGroups(memberOf('sub'), memberOf('class'), relBounds, subNames, syms.length)
+    : [];
 
   /* With style analysis applied, a holding contributes fractionally to several
      categories at once; otherwise it sits wholly in one. */
   const anyFit = syms.some(s => STYLES[s] && STYLES[s].r2 >= STYLE_R2_OK);
   if (styleUseMix && anyFit) {
-    return buildFractionalGroups(styleMembership(syms, 'class'), clsBounds, clsNames, 'class', syms.length)
-      .concat(buildFractionalGroups(styleMembership(syms, 'sub'), subBounds, subNames, 'sub', syms.length));
+    return buildFractionalGroups(memberOf('class'), clsBounds, clsNames, 'class', syms.length)
+      .concat(buildFractionalGroups(memberOf('sub'), subBounds, subNames, 'sub', syms.length))
+      .concat(relGroups);
   }
   return buildGroups(syms.map(s => classOf(s)), clsBounds, clsNames, 'class')
-    .concat(buildGroups(syms.map(s => subclassOf(s)), subBounds, subNames, 'sub'));
+    .concat(buildGroups(syms.map(s => subclassOf(s)), subBounds, subNames, 'sub'))
+    .concat(relGroups);
 }
 
 function persistConstraints() {
@@ -1083,6 +1134,7 @@ function renderOptimizer(objective) {
   if (opt.violations && opt.violations.length) {
     infeasible += `<div class="opt-warn"><b>Couldn’t meet ${opt.violations.length === 1 ? 'one limit' : 'some limits'}.</b> `
       + opt.violations.map(v => esc(v.name) + ' came out at ' + FMT.pct(v.actual, 1)
+        + (v.rel ? ' of its class' : '')
         + ' (limit ' + FMT.pct(v.lo, 0) + '–' + FMT.pct(v.hi, 0) + ')').join('; ')
       + '. Usually that means there are no holdings in that category — add one, or relax the limit.</div>';
   }
@@ -1264,9 +1316,25 @@ function bindEvents() {
     const raw = inp.value.trim();
     const b = constraintState.bounds[key] || (constraintState.bounds[key] = {});
     b[side] = raw === '' ? null : Math.max(0, Math.min(100, parseFloat(raw) || 0)) / 100;
-    if (b.lo == null && b.hi == null) delete constraintState.bounds[key];
+    // keep the entry alive if a basis was chosen, or that choice is lost
+    if (b.lo == null && b.hi == null && !b.rel) delete constraintState.bounds[key];
     persistConstraints();
     resolveSoon();
+  });
+
+  /* Switching a subcategory between "% of total" and "% of its class". The
+     numbers already typed keep their values but change meaning, so the row's
+     "now" figure is recomputed on the new basis straight away. */
+  $('cnRows').addEventListener('change', e => {
+    const sel = e.target.closest('[data-basis]');
+    if (!sel) return;
+    const key = sel.dataset.basis;
+    const b = constraintState.bounds[key] || (constraintState.bounds[key] = {});
+    b.rel = sel.value === 'rel';
+    // only discard once there is nothing left to remember
+    if (b.lo == null && b.hi == null && !b.rel) delete constraintState.bounds[key];
+    persistConstraints();
+    if (state.last) renderOptimizer(currentObjective());
   });
 
   $('cnEnable').addEventListener('change', e => {
