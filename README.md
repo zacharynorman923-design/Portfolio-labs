@@ -108,8 +108,8 @@ unconstrained optimum is a single holding — whichever had the highest alpha in
 that window. The app says so rather than presenting a one-fund result as a
 portfolio; apply allocation limits to get a diversified answer.
 
-The last two are the constrained duals of the same frontier. Both are solved by
-bisecting `γ`, since return and volatility each increase monotonically along the
+**Max return at a given volatility** and **min volatility for a given return**
+are the constrained duals of the same frontier. Both are solved by bisecting `γ`, since return and volatility each increase monotonically along the
 frontier — no extra constraint machinery needed. Each box shows the **reachable
 range** for the current holdings, and if you ask for something outside it the app
 says so, reports the closest achievable portfolio, and tells you what kind of
